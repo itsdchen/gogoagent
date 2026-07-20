@@ -23,6 +23,7 @@ usage() {
 Usage:
   ./start.sh              Start the full dev app: desktop + sidecar.
   ./start.sh --frontend   Restart only Electron/frontend; requires an existing sidecar.
+  ./start.sh --check      Install/repair dependencies and verify startup prerequisites.
 EOF
 }
 
@@ -49,9 +50,29 @@ require_pnpm() {
     || fail "Corepack could not run pnpm. Try: corepack enable && corepack pnpm install"
 }
 
+install_dependencies() {
+  info "$1"
+  corepack pnpm install \
+    || fail "Dependency installation failed. Correct the error above, then rerun ./start.sh."
+}
+
+dependencies_resolve() {
+  node -e '
+    const { createRequire } = require("node:module")
+    const path = require("node:path")
+    const root = process.cwd()
+    createRequire(path.join(root, "services/sidecar/package.json")).resolve("node-pty/package.json")
+    createRequire(path.join(root, "apps/desktop/package.json")).resolve("electron/package.json")
+  ' >/dev/null 2>&1
+}
+
 require_install() {
-  [[ -d node_modules ]] \
-    || fail "Dependencies are not installed. Run: corepack pnpm install"
+  if [[ -d node_modules ]] && dependencies_resolve; then
+    return
+  fi
+  install_dependencies "Dependencies are missing or incomplete; installing the workspace now..."
+  dependencies_resolve \
+    || fail "Dependency installation completed, but Electron or node-pty still cannot be resolved."
 }
 
 require_node_pty_binary() {
@@ -66,7 +87,41 @@ require_node_pty_binary() {
     return
   fi
 
-  fail "node-pty's native binary is missing for ${platform}-${arch}, so the sidecar cannot start. Rebuild its approved native dependency:\n  corepack pnpm rebuild node-pty\n\nIf that reports a compiler error on Linux, install your distribution's C/C++ build tools and Python, then rerun the rebuild."
+  info "node-pty's native binary is missing for ${platform}-${arch}; rebuilding it now..."
+  corepack pnpm rebuild node-pty \
+    || fail "node-pty could not be built. On Linux, install your distribution's C/C++ build tools and Python, then rerun ./start.sh."
+
+  if [[ ! -f "$pty_dir/build/Release/pty.node" && ! -f "$pty_dir/build/Debug/pty.node" && ! -f "$pty_dir/prebuilds/${platform}-${arch}/pty.node" ]]; then
+    fail "node-pty finished rebuilding, but its native binary is still missing for ${platform}-${arch}."
+  fi
+}
+
+electron_binary_ready() {
+  node -e '
+    const fs = require("node:fs")
+    const { createRequire } = require("node:module")
+    const path = require("node:path")
+    const root = process.cwd()
+    const binaryPath = createRequire(path.join(root, "apps/desktop/package.json"))("electron")
+    process.exit(fs.existsSync(binaryPath) ? 0 : 1)
+  ' >/dev/null 2>&1
+}
+
+require_electron_binary() {
+  local electron_dir
+  electron_dir="$(node -e "const { createRequire } = require('node:module'); const path = require('node:path'); const fromDesktop = createRequire(path.join(process.cwd(), 'apps/desktop/package.json')); console.log(path.dirname(fromDesktop.resolve('electron/package.json')))" 2>/dev/null)" \
+    || fail "Electron is not installed. Rerun: corepack pnpm install"
+
+  if electron_binary_ready; then
+    return
+  fi
+
+  info "Electron's application binary is missing; installing it now..."
+  node "$electron_dir/install.js" \
+    || fail "Electron's application binary could not be installed. Check the network error above, then rerun ./start.sh."
+
+  electron_binary_ready \
+    || fail "Electron installation finished, but its application binary is still missing."
 }
 
 check_electron_sandbox() {
@@ -91,12 +146,16 @@ preflight() {
   require_pnpm
   require_install
   require_node_pty_binary
+  require_electron_binary
   check_electron_sandbox
 }
 
 mode="full"
 if [[ "${1:-}" == "--frontend" ]]; then
   mode="frontend"
+  shift
+elif [[ "${1:-}" == "--check" ]]; then
+  mode="check"
   shift
 elif [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   usage
@@ -109,6 +168,11 @@ fi
 cd "$ROOT_DIR"
 
 preflight
+
+if [[ "$mode" == "check" ]]; then
+  info "Startup prerequisites are ready. Run ./start.sh to launch gogoagent."
+  exit 0
+fi
 
 if [[ "$mode" == "full" ]]; then
   exec corepack pnpm --filter @gogoagent/desktop dev "$@"

@@ -65,58 +65,6 @@ function buildPrompt(ctx: ProjectTitleContext): string {
   ].join('\n')
 }
 
-export interface CompactTitleContext {
-  repoRoot: string
-  branch?: string
-  firstUserMessages: string[]
-}
-
-function buildCompactPrompt(ctx: CompactTitleContext): string {
-  const repoName = slugName(ctx.repoRoot)
-  const messages = ctx.firstUserMessages
-    .slice(0, 3)
-    .map((text, i) => `${i + 1}. ${text.slice(0, 400)}`)
-
-  return [
-    `Based on the first few prompts a user sent to Claude Code, describe what they were trying to accomplish.`,
-    ``,
-    `Repo: ${repoName}`,
-    `Branch: ${ctx.branch ?? '(none)'}`,
-    ``,
-    `First user prompts:`,
-    ...(messages.length ? messages : ['(no prompts captured)']),
-    ``,
-    `Return a short, specific name (≤70 chars) describing the task.`,
-    `Use concrete verbs and nouns — avoid generic words like "work", "stuff", "session", "project", "tasks".`,
-    `Do not include the repo name ("${repoName}") or branch in the name.`,
-    ``,
-    `Also write a one-sentence summary (≤160 chars).`,
-    ``,
-    `Respond ONLY with JSON matching the provided schema. Do not use tools.`,
-  ].join('\n')
-}
-
-export async function suggestCompactProjectTitle(
-  ctx: CompactTitleContext,
-  runner: CodexRunner = defaultCodexRunner,
-): Promise<SuggestedTitle> {
-  const schemaDir = await mkdtemp(path.join(os.tmpdir(), 'gogoagent-title-schema-'))
-  const schemaPath = path.join(schemaDir, 'schema.json')
-  await writeFile(schemaPath, JSON.stringify(OUTPUT_SCHEMA), 'utf8')
-  try {
-    const prompt = buildCompactPrompt(ctx)
-    const raw = await runner({ prompt, schemaPath })
-    const text = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '')
-    const parsed = JSON.parse(text) as { name?: unknown; summary?: unknown }
-    const name = typeof parsed.name === 'string' ? parsed.name.trim() : ''
-    const summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : ''
-    if (!name) throw new Error('LLM returned empty title')
-    return { name, summary }
-  } finally {
-    await rm(schemaDir, { recursive: true, force: true }).catch(() => {})
-  }
-}
-
 export async function suggestProjectTitle(
   ctx: ProjectTitleContext,
   runner: CodexRunner = defaultCodexRunner,

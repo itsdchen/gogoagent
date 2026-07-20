@@ -1,6 +1,6 @@
 import { open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
-import type { ArtifactEvidence, ArtifactKind, ArtifactRecord, SessionMessageRecord, SessionStatus } from '@gogoagent/shared'
+import type { ArtifactEvidence, ArtifactKind, ArtifactRecord, SessionMessageRecord } from '@gogoagent/shared'
 import type { ParseTranscriptDeps, TranscriptParseResult } from './parseTranscript.js'
 import { walkFiles } from './discovery.js'
 import { clampTitle, safeJsonParse, stableId } from './utils.js'
@@ -157,7 +157,10 @@ export async function loadTerminalLogSessions(
         const log = await readLogTail(logPath)
         const updatedAt = metadata.endedAt ?? metadata.lastActivityAt ?? metadata.startedAt
         const messages = chunkTerminalMessages(sessionId, log.text, updatedAt)
-        const status: SessionStatus = metadata.status === 'running' ? 'active' : 'archived'
+        // A persisted log only proves that a terminal existed. The sidecar
+        // process that owned it may have exited without updating metadata, so
+        // live status is applied later from the in-memory terminal registry.
+        const status = 'archived'
         const artifacts = [
           makeArtifact(sessionId, 'terminal_log', 'Terminal log', {
             path: logPath,

@@ -12,6 +12,8 @@ import {
 } from './workstreamLabels.js'
 
 const jobs = new Map<string, RefineJobStatus>()
+const activeJobsByKey = new Map<string, RefineJobStatus>()
+const startingJobsByKey = new Map<string, Promise<RefineJobStatus>>()
 
 function makeStatus(total: number): RefineJobStatus {
   return {
@@ -40,7 +42,15 @@ interface StartWorkstreamLabelJobArgs {
   runner?: CodexRunner
 }
 
-export async function startWorkstreamLabelJob(args: StartWorkstreamLabelJobArgs): Promise<RefineJobStatus> {
+function labelJobKey(args: StartWorkstreamLabelJobArgs) {
+  const workstreamIds = args.workstreams.map((workstream) => workstream.id).sort()
+  return JSON.stringify({ force: Boolean(args.force), workstreamIds })
+}
+
+async function prepareWorkstreamLabelJob(
+  args: StartWorkstreamLabelJobArgs,
+  jobKey: string,
+): Promise<RefineJobStatus> {
   const allInputs = args.workstreams.map((workstream) =>
     buildWorkstreamLabelInput(workstream, args.sessionResults, args.workLocations),
   )
@@ -67,6 +77,7 @@ export async function startWorkstreamLabelJob(args: StartWorkstreamLabelJobArgs)
   }
 
   const batchSize = args.batchSize ?? 8
+  activeJobsByKey.set(jobKey, status)
 
   ;(async () => {
     status.state = 'running'
@@ -117,10 +128,28 @@ export async function startWorkstreamLabelJob(args: StartWorkstreamLabelJobArgs)
       })
     } finally {
       status.finishedAt = new Date().toISOString()
+      if (activeJobsByKey.get(jobKey) === status) activeJobsByKey.delete(jobKey)
     }
   })()
 
   return status
+}
+
+export async function startWorkstreamLabelJob(args: StartWorkstreamLabelJobArgs): Promise<RefineJobStatus> {
+  const jobKey = labelJobKey(args)
+  const active = activeJobsByKey.get(jobKey)
+  if (active && (active.state === 'pending' || active.state === 'running')) return active
+
+  const starting = startingJobsByKey.get(jobKey)
+  if (starting) return starting
+
+  const start = prepareWorkstreamLabelJob(args, jobKey)
+  startingJobsByKey.set(jobKey, start)
+  try {
+    return await start
+  } finally {
+    if (startingJobsByKey.get(jobKey) === start) startingJobsByKey.delete(jobKey)
+  }
 }
 
 export function getWorkstreamLabelJob(jobId: string) {

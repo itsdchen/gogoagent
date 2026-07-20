@@ -36,6 +36,7 @@ interface TerminalSession {
   finalized?: boolean
   lastWriteBreadcrumbAt?: number
   lastActivityMetadataWriteAt?: number
+  recentVisibleOutput?: string
 }
 
 export type TerminalEvent =
@@ -66,6 +67,7 @@ const terminalSessions = new Map<string, TerminalSession>()
 const terminalListeners = new Set<(event: TerminalEvent) => void>()
 const MAX_LOG_REPLAY_BYTES = 1024 * 1024
 const ACTIVITY_METADATA_WRITE_INTERVAL_MS = 15_000
+const NEEDS_INPUT_CONTEXT_CHARS = 6000
 
 function emit(event: TerminalEvent) {
   for (const listener of terminalListeners) listener(event)
@@ -253,13 +255,41 @@ function visibleTerminalText(data: string) {
     .trim()
 }
 
-function inferNeedsInput(record: TerminalSessionRecord, data: string) {
+export function appendNeedsInputContext(previous: string | undefined, data: string) {
+  const visible = visibleTerminalText(data)
+  if (!visible) return previous ?? ''
+  return `${previous ?? ''}\n${visible}`.slice(-NEEDS_INPUT_CONTEXT_CHARS)
+}
+
+function textSignalsAwaitingInput(compact: string) {
+  return /\b(?:awaiting|waiting for|needs) (?:user )?input\b/i.test(compact)
+    || /\binput required\b/i.test(compact)
+    || /\bapproval required\b/i.test(compact)
+    || /\bpress (?:enter|y|n)\b/i.test(compact)
+    || /\benter to select\b/i.test(compact)
+    || /\btab\/arrow keys? to navigate\b/i.test(compact)
+    || /\btab to amend\b/i.test(compact)
+    || /\bctrl\+e to explain\b/i.test(compact)
+    || /\bselect (?:one|an option)\b/i.test(compact)
+    || /\bchoose (?:one|an option|a number)\b/i.test(compact)
+    || /\b1\.\s*yes\b.*\b2\.\s*no\b/i.test(compact)
+    || /\bi need from you\b/i.test(compact)
+    || /\bplease (?:confirm|provide|choose|select|approve)\b/i.test(compact)
+    || /\bdo you want to\b/i.test(compact)
+}
+
+export function inferNeedsInput(
+  record: Pick<TerminalSessionRecord, 'kind' | 'needsInput'>,
+  data: string,
+  recentVisibleOutput = '',
+) {
   if (record.kind === 'shell') return record.needsInput ?? false
 
   const text = visibleTerminalText(data)
   if (!text) return record.needsInput ?? false
 
   const compact = text.replace(/\s+/g, ' ').trim()
+  const recentCompact = recentVisibleOutput.replace(/\s+/g, ' ').trim()
   const isNonBlockingStatus = /\bno response requested\b/i.test(compact)
     || /\bno need to (?:check in|respond)\b/i.test(compact)
     || /\bi'?ll (?:ping|come back|let you know)\b/i.test(compact)
@@ -271,21 +301,12 @@ function inferNeedsInput(record: TerminalSessionRecord, data: string) {
     || /\b(?:thinking|tokens?)\b/i.test(compact)
     || /\b(?:shells?|commands?|jobs?) still running\b/i.test(compact)
     || /\b(?:canoodling|catapulting|embellishing|cooking|running|reading|writing|editing|searching)\u2026/i.test(compact)
-  const isAwaitingInput = /\b(?:awaiting|waiting for|needs) (?:user )?input\b/i.test(compact)
-    || /\binput required\b/i.test(compact)
-    || /\bapproval required\b/i.test(compact)
-    || /\bpress (?:enter|y|n)\b/i.test(compact)
-    || /\benter to select\b/i.test(compact)
-    || /\btab\/arrow keys? to navigate\b/i.test(compact)
-    || /\bselect (?:one|an option)\b/i.test(compact)
-    || /\bchoose (?:one|an option|a number)\b/i.test(compact)
-    || /\bi need from you\b/i.test(compact)
-    || /\bplease (?:confirm|provide|choose|select|approve)\b/i.test(compact)
-    || /\bdo you want to\b/i.test(compact)
+  const isAwaitingInput = textSignalsAwaitingInput(compact)
 
   if (isNonBlockingStatus) return false
   if (isAwaitingInput) return true
   if (isWorking) return false
+  if (textSignalsAwaitingInput(recentCompact)) return true
   return record.needsInput ?? false
 }
 
@@ -377,7 +398,8 @@ export function createTerminal(input: CreateTerminalInput) {
   ptyProcess.onData((data) => {
     appendTerminalLog(session, data)
     const lastActivityAt = markTerminalActivity(session)
-    const needsInput = inferNeedsInput(record, data)
+    session.recentVisibleOutput = appendNeedsInputContext(session.recentVisibleOutput, data)
+    const needsInput = inferNeedsInput(record, data, session.recentVisibleOutput)
     const needsInputChanged = updateNeedsInput(session, needsInput)
     emit({ type: 'data', payload: { id, data, logBytes: record.logBytes, lastActivityAt, needsInput: record.needsInput ?? false, needsInputChanged } })
   })
@@ -443,7 +465,9 @@ export function writeTerminal(id: string, data: string) {
     interactionRecorded = true
     writeTerminalMetadata(session)
   }
-  const needsInputChanged = submitsUserInput(data) ? updateNeedsInput(session, false) : false
+  const submitted = submitsUserInput(data)
+  if (submitted) session.recentVisibleOutput = ''
+  const needsInputChanged = submitted ? updateNeedsInput(session, false) : false
   session.ptyProcess.write(data)
   if (needsInputChanged) {
     emit({ type: 'data', payload: { id, data: '', logBytes: session.record.logBytes, needsInput: false, needsInputChanged: true } })

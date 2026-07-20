@@ -43,9 +43,16 @@ const port = Number(process.env.GOGOAGENT_PORT ?? 43111)
 const baseUrl = `http://127.0.0.1:${port}`
 const authTokenPath = process.env.GOGOAGENT_AUTH_TOKEN_FILE
   ?? path.join(os.homedir(), '.gogoagent', `sidecar-${port}.token`)
-const authToken = readFileSync(authTokenPath, 'utf8').trim()
-if (!authToken) throw new Error(`gogoagent sidecar authentication token is empty: ${authTokenPath}`)
+function readAuthToken() {
+  const token = readFileSync(authTokenPath, 'utf8').trim()
+  if (!token) throw new Error(`gogoagent sidecar authentication token is empty: ${authTokenPath}`)
+  return token
+}
+
+let authToken = readAuthToken()
 let terminalEventsConnected = false
+let terminalEventsConnectionId = 0
+let terminalEventsReconnectTimer: ReturnType<typeof setTimeout> | null = null
 const terminalCreatedCallbacks = new Set<(record: TerminalSessionRecord) => void>()
 const terminalDataCallbacks = new Set<(payload: TerminalDataPayload) => void>()
 const terminalExitCallbacks = new Set<(payload: TerminalExitPayload) => void>()
@@ -60,14 +67,30 @@ async function requestJson<T>(path: string, init: SidecarRequestInit = {}): Prom
   if (!path.startsWith('/') || path.startsWith('//')) {
     throw new Error(`Invalid sidecar path: ${path}`)
   }
-  const response = await fetch(`${baseUrl}${path}`, {
+  const makeRequest = (token: string) => fetch(`${baseUrl}${path}`, {
     method: init.method ?? 'GET',
     headers: {
-      authorization: `Bearer ${authToken}`,
+      authorization: `Bearer ${token}`,
       ...(init.body === undefined ? {} : { 'content-type': 'application/json' }),
     },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   })
+
+  const requestToken = authToken
+  let response = await makeRequest(requestToken)
+  if (response.status === 401) {
+    let nextToken = ''
+    try {
+      nextToken = readAuthToken()
+    } catch {
+      // Keep the original response so the caller receives the useful 401.
+    }
+    if (nextToken && nextToken !== requestToken) {
+      authToken = nextToken
+      await response.body?.cancel().catch(() => undefined)
+      response = await makeRequest(nextToken)
+    }
+  }
   if (!response.ok) {
     let detail = ''
     try {
@@ -118,14 +141,42 @@ function dispatchTerminalEvent<T>(data: string, callbacks: Set<(payload: T) => v
   for (const callback of callbacks) callback(payload)
 }
 
+function hasTerminalEventSubscribers() {
+  return terminalCreatedCallbacks.size > 0 ||
+    terminalDataCallbacks.size > 0 ||
+    terminalExitCallbacks.size > 0 ||
+    terminalClosedCallbacks.size > 0
+}
+
+function scheduleTerminalEventsReconnect() {
+  if (!hasTerminalEventSubscribers() || terminalEventsReconnectTimer !== null) return
+  terminalEventsReconnectTimer = setTimeout(() => {
+    terminalEventsReconnectTimer = null
+    ensureTerminalEvents()
+  }, 500)
+}
+
 function ensureTerminalEvents() {
   if (terminalEventsConnected) return
+  try {
+    authToken = readAuthToken()
+  } catch {
+    scheduleTerminalEventsReconnect()
+    return
+  }
   terminalEventsConnected = true
+  const connectionId = ++terminalEventsConnectionId
+
+  const disconnected = () => {
+    if (connectionId !== terminalEventsConnectionId) return
+    terminalEventsConnected = false
+    scheduleTerminalEventsReconnect()
+  }
 
   const request = httpGet(`${baseUrl}/terminals/events?token=${encodeURIComponent(authToken)}`, (response) => {
     if (response.statusCode !== 200) {
-      terminalEventsConnected = false
       response.resume()
+      disconnected()
       return
     }
 
@@ -161,15 +212,18 @@ function ensureTerminalEvents() {
       }
     })
     response.once('end', () => {
-      terminalEventsConnected = false
+      disconnected()
+    })
+    response.once('close', () => {
+      disconnected()
     })
     response.once('error', () => {
-      terminalEventsConnected = false
+      disconnected()
     })
   })
 
   request.once('error', () => {
-    terminalEventsConnected = false
+    disconnected()
   })
 }
 
@@ -233,29 +287,29 @@ contextBridge.exposeInMainWorld('gogoagent', {
     close: (id: string) =>
       requestJson<void>(terminalPath(id, 'close'), { method: 'POST' }),
     onCreated: (callback: (record: TerminalSessionRecord) => void) => {
-      ensureTerminalEvents()
       terminalCreatedCallbacks.add(callback)
+      ensureTerminalEvents()
       return () => {
         terminalCreatedCallbacks.delete(callback)
       }
     },
     onData: (callback: (payload: TerminalDataPayload) => void) => {
-      ensureTerminalEvents()
       terminalDataCallbacks.add(callback)
+      ensureTerminalEvents()
       return () => {
         terminalDataCallbacks.delete(callback)
       }
     },
     onExit: (callback: (payload: TerminalExitPayload) => void) => {
-      ensureTerminalEvents()
       terminalExitCallbacks.add(callback)
+      ensureTerminalEvents()
       return () => {
         terminalExitCallbacks.delete(callback)
       }
     },
     onClosed: (callback: (payload: TerminalClosedPayload) => void) => {
-      ensureTerminalEvents()
       terminalClosedCallbacks.add(callback)
+      ensureTerminalEvents()
       return () => {
         terminalClosedCallbacks.delete(callback)
       }

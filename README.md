@@ -56,17 +56,27 @@ Live terminals can be started two ways:
 
 On first scan, the sidecar parses Claude JSONL transcripts and writes a local parse cache at:
 
-- `~/.gogoagent/cache/transcripts-v1.json`
+- `~/.gogoagent/cache/transcripts-v2.json`
 
 Later scans reuse cached transcripts when the file path, size, modified time, and dependent Claude metadata still match. This keeps repeat launches from reparsing unchanged history. `POST /debug/rescan` still forces a fresh snapshot walk, but valid transcript parse cache entries are reused.
 
 Set `GOGOAGENT_SNAPSHOT_CACHE_MS` to tune the short in-memory snapshot de-dupe window. The default is `1000` ms.
 
-LLM-generated workstream labels are cached at:
+Durable user-visible state is stored under:
 
-- `~/.cache/gogoagent/workstream-labels.json`
+- `~/.gogoagent/state/title-overrides.json`
+- `~/.gogoagent/state/workstream-labels.json`
+- `~/.gogoagent/state/workstream-archive.json`
+- `~/.gogoagent/state/refined-lessons.json`
 
-Use the sidebar `Label names` action to generate or refresh labels. Labeling runs through the local `codex` CLI and is skipped for workstreams whose cached label is still current.
+On first use, older copies of these files under `~/.cache/gogoagent` are
+copied into the state directory without deleting the originals. Set
+`GOGOAGENT_STATE_DIR` to override the state directory. Regenerable caches and
+legacy auto-title fallbacks remain under `~/.cache/gogoagent`.
+
+Use the sidebar naming action to generate or refresh workstream labels.
+Labeling runs through the local `codex` CLI, deduplicates identical active
+jobs, and skips workstreams whose saved label is still current.
 
 ## Prereqs
 
@@ -76,28 +86,34 @@ Use the sidebar `Label names` action to generate or refresh labels. Labeling run
 
 ## Install
 
-From the repo root:
+The first launch can bootstrap itself. From the repo root, run:
+
+```bash
+./start.sh
+```
+
+If workspace dependencies, `node-pty`'s native module, or Electron's application
+binary are missing, the script installs or repairs them before launching. On
+Linux, building `node-pty` needs standard C/C++ build tools and Python. If that
+build reports a compiler error, install your distribution's development-tool
+package and Python, then rerun `./start.sh`.
+
+To prepare and verify dependencies without launching the app:
+
+```bash
+./start.sh --check
+```
+
+The equivalent manual installation command is:
 
 ```bash
 corepack pnpm install
 ```
 
-The workspace explicitly approves `node-pty`'s required native build, so
-the command above builds the terminal integration automatically. On Linux,
-that build needs standard C/C++ build tools and Python. If the install reports
-a compiler error, install your distribution's development-tool package and
-Python, then rerun the command.
-
-If an older or interrupted install left the native module missing, rebuild it:
+If an automatic repair fails, the underlying commands are:
 
 ```bash
 corepack pnpm rebuild node-pty
-```
-
-If you see `Electron failed to install correctly`, reinstall Electron's
-binary directly:
-
-```bash
 node node_modules/.pnpm/electron@*/node_modules/electron/install.js
 ```
 
@@ -121,10 +137,12 @@ You will need to redo this any time Electron is reinstalled.
 ### Easiest way: start the desktop app
 
 ```bash
-corepack pnpm --filter @gogoagent/desktop dev
+./start.sh
 ```
 
-This is the main command to use right now.
+This is the main command to use right now. It checks the installed Node.js,
+pnpm, Electron, and native terminal dependency before launching, then tells
+you how to correct any missing prerequisite.
 
 It should:
 
@@ -132,9 +150,15 @@ It should:
 - start the sidecar in dev mode
 - launch the Electron UI
 
-Pressing Ctrl+C in that command stops both Electron and the sidecar. Closing
-the Electron window can leave the sidecar running so live terminal sessions
-survive app window restarts.
+Pressing Ctrl+C stops Electron and any sidecar started by that command. A
+sidecar reused from an earlier launch stays running. Closing the Electron
+window can also leave the sidecar running so live terminal sessions survive
+app window restarts.
+
+The launcher reuses a healthy sidecar on the selected port. It never switches
+to another port automatically, because doing so would make the first sidecar's
+live terminals disappear from the new window. To run a separate instance,
+choose the port explicitly, for example `GOGOAGENT_PORT=43112 ./start.sh`.
 
 ### Run only the sidecar
 
@@ -156,8 +180,13 @@ Useful endpoints:
 Example:
 
 ```bash
-curl http://127.0.0.1:43111/health
-curl http://127.0.0.1:43111/snapshot | jq
+GOGOAGENT_PORT="${GOGOAGENT_PORT:-43111}"
+GOGOAGENT_TOKEN="$(tr -d '\r\n' < "$HOME/.gogoagent/sidecar-${GOGOAGENT_PORT}.token")"
+
+# Health is public. All other endpoints require the per-run bearer token.
+curl "http://127.0.0.1:${GOGOAGENT_PORT}/health"
+curl -H "authorization: Bearer ${GOGOAGENT_TOKEN}" \
+  "http://127.0.0.1:${GOGOAGENT_PORT}/snapshot" | jq
 ```
 
 ## Build / verify
@@ -188,26 +217,30 @@ Run the isolated first-run test with:
 corepack pnpm test:clean-start
 ```
 
-It starts the sidecar with a temporary empty home directory, confirms the
-empty snapshot is healthy, then adds one fixture Claude transcript and confirms
-that it appears as a workstream. It never reads from or writes to your real
-`~/.claude` or `~/.gogoagent` directories.
+It starts and restarts the sidecar with a temporary home directory, checks the
+authentication boundary and token rotation, verifies empty and populated
+discovery, confirms stale terminal logs appear as history, migrates durable
+state out of cache, and checks that duplicate label requests share one job. It
+never writes to your real `~/.claude`, `~/.gogoagent`, or
+`~/.cache/gogoagent` directories.
 
-## Current UI modes
+The launcher regression test confirms an occupied port never causes an
+implicit switch:
 
-The desktop app currently has top-level modes for:
+```bash
+corepack pnpm test:launcher-port
+```
 
-- **Threads**
-- **Worked Here**
-- **Lessons**
-- **Sessions**
-- **Debug**
+## Current UI
 
-The UX is intentionally moving toward:
+The desktop app centers on a workstream list and one selected workstream's
+timeline. From there you can:
 
-- minimal by default
-- progressively disclosed detail
-- fewer simultaneously visible panels
+- start a shell, Claude, or Codex terminal in a working directory
+- inspect sessions, messages, artifacts, work locations, and lessons
+- search transcript messages
+- archive or restore workstreams
+- open Debug when discovery or indexing looks wrong
 
 ## What works today
 
@@ -244,15 +277,13 @@ These are still heuristic, but getting stronger over time.
 
 1. Run:
    ```bash
-   corepack pnpm --filter @gogoagent/desktop dev
+   ./start.sh
    ```
 2. Open the app
-3. Start in:
-   - **Threads** for clustered workstreams
-   - **Worked Here** for directories Claude has operated in
-   - **Lessons** for correction review
-4. Use **Sessions** when you need transcript-level detail
-5. Use **Debug** only when something looks off
+3. Choose a discovered workstream, or enter a directory under **Start a
+   workstream** and choose `+`.
+4. Open session details from the timeline when you need transcript-level detail.
+5. Use **Debug** only when discovery or indexing looks wrong.
 
 ## Development notes
 

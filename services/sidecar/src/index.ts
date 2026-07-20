@@ -19,10 +19,10 @@ import {
   type TranscriptParseResult,
   parseTranscript,
 } from './lib/parseTranscript.js'
-import { getAllAutoTitles, putAutoTitle } from './lib/autoTitleStore.js'
+import { getAllAutoTitles } from './lib/autoTitleStore.js'
 import { getAllRefined, getRefinedForSession } from './lib/refineCache.js'
 import { dryRunRefine, getJob, startRefineJob } from './lib/refineJobs.js'
-import { suggestCompactProjectTitle, suggestProjectTitle, type SessionOpener } from './lib/refineTitles.js'
+import { suggestProjectTitle, type SessionOpener } from './lib/refineTitles.js'
 import { beginScan, endScan, getLastActivity, getState, recordActivity, recordError, runStep, setCount, setPaths } from './lib/state.js'
 import {
   addTerminalEventListener,
@@ -48,7 +48,7 @@ import {
 import { clampTitle, stableId } from './lib/utils.js'
 import { applyArchivedWorkstreamState, archiveWorkstream, restoreWorkstream } from './lib/workstreamArchive.js'
 import { getWorkstreamLabelJob, startWorkstreamLabelJob } from './lib/workstreamLabelJobs.js'
-import { putManualWorkstreamLabel } from './lib/workstreamLabels.js'
+import { getStoredWorkstreamLabelIds, putManualWorkstreamLabel } from './lib/workstreamLabels.js'
 import { getAllOverrides, setProjectTitle, setSessionTitle } from './lib/titleStore.js'
 import { migrateLegacyClauderatorState } from './lib/legacyClauderatorMigration.js'
 import type {
@@ -72,6 +72,7 @@ const sessionsDir = path.join(claudeDir, 'sessions')
 const todosDir = path.join(claudeDir, 'todos')
 const terminalLogDir = process.env.GOGOAGENT_TERMINAL_LOG_DIR ?? path.join(os.homedir(), '.gogoagent', 'terminal-logs')
 const cacheDir = process.env.GOGOAGENT_CACHE_DIR ?? path.join(os.homedir(), '.cache', 'gogoagent')
+const stateDir = process.env.GOGOAGENT_STATE_DIR ?? path.join(os.homedir(), '.gogoagent', 'state')
 
 const parseTranscriptDeps: ParseTranscriptDeps = {
   readJsonlLines,
@@ -211,6 +212,14 @@ async function loadTerminalLogs(): Promise<TranscriptParseResult[]> {
     'terminalLogs',
     async () => {
       const results = await loadTerminalLogSessions(terminalLogDir, parseTranscriptDeps)
+      const activeSessionIds = new Set(
+        terminalRecords()
+          .filter((terminal) => terminal.status === 'running')
+          .map((terminal) => `terminal-${terminal.id}`),
+      )
+      for (const result of results) {
+        result.session.status = activeSessionIds.has(result.session.id) ? 'active' : 'archived'
+      }
       setCount('terminalLogFiles', results.length)
       return results
     },
@@ -414,6 +423,7 @@ async function buildSnapshot(force = false): Promise<SidecarSnapshot> {
       { name: 'sessionsDir', path: sessionsDir },
       { name: 'todosDir', path: todosDir },
       { name: 'terminalLogDir', path: terminalLogDir },
+      { name: 'stateDir', path: stateDir },
     ])
     try {
       const sessionResults = await loadIndexedSessions()
@@ -425,13 +435,17 @@ async function buildSnapshot(force = false): Promise<SidecarSnapshot> {
       await applyTerminalWorkstreams(snapshot)
       const overrides = await getAllOverrides()
       const autoTitles = await getAllAutoTitles()
+      const storedWorkstreamLabelIds = await getStoredWorkstreamLabelIds()
       for (const session of snapshot.sessions) {
         const override = overrides.sessions[session.id]
         if (override) session.title = override
       }
       for (const workstream of snapshot.workstreams) {
         const auto = autoTitles[workstream.id]
-        if (auto && auto.name) workstream.name = auto.name
+        // Preserve old auto-titles only when the canonical label store has no
+        // entry. The former auto-title worker and the label job used to race
+        // and repeatedly overwrite one another with different names.
+        if (!storedWorkstreamLabelIds.has(workstream.id) && auto?.name) workstream.name = auto.name
         const override = overrides.projects[workstream.id]
         if (override) workstream.name = override
       }
@@ -444,7 +458,6 @@ async function buildSnapshot(force = false): Promise<SidecarSnapshot> {
       snapshotCache = { snapshot, builtAt: Date.now() }
       endScan(true)
       recordActivity(`Scanned ${snapshot.workstreams.length} projects, ${snapshot.sessions.length} sessions`)
-      kickAutoTitleWorker(snapshot)
       return snapshot
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -574,74 +587,6 @@ async function buildProjectDetail(projectId: string): Promise<ProjectDetail | nu
   return { project, sessions, refinedLessons, touchedPaths }
 }
 
-const AUTO_TITLES_ENABLED = process.env.GOGOAGENT_AUTO_TITLES !== '0'
-let autoTitleWorkerRunning = false
-
-function kickAutoTitleWorker(snapshot: SidecarSnapshot) {
-  if (!AUTO_TITLES_ENABLED) return
-  if (autoTitleWorkerRunning) return
-  autoTitleWorkerRunning = true
-  void runAutoTitleWorker(snapshot).finally(() => {
-    autoTitleWorkerRunning = false
-  })
-}
-
-async function runAutoTitleWorker(snapshot: SidecarSnapshot) {
-  try {
-    const overrides = await getAllOverrides()
-    const autoTitles = await getAllAutoTitles()
-
-    const pending = snapshot.workstreams.filter((w) => {
-      if (overrides.projects[w.id]) return false
-      const auto = autoTitles[w.id]
-      if (auto && auto.name) return false
-      return true
-    })
-    if (pending.length === 0) return
-
-    const sessionResults = await loadTranscripts()
-    const sessionById = new Map(sessionResults.map((r) => [r.session.id, r]))
-
-    for (const workstream of pending) {
-      const messages: { text: string; timestamp: string }[] = []
-      for (const sid of workstream.sessionIds) {
-        const entry = sessionById.get(sid)
-        if (!entry) continue
-        for (const msg of entry.messages) {
-          if (msg.role !== 'user') continue
-          if (!msg.text || msg.text.startsWith('<local-command-caveat>')) continue
-          messages.push({ text: msg.text, timestamp: msg.timestamp })
-        }
-      }
-      messages.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-      const firstUserMessages = messages.slice(0, 3).map((m) => m.text)
-      if (firstUserMessages.length === 0) continue
-
-      recordActivity(`Suggesting title for "${workstream.name}"…`)
-      try {
-        const suggestion = await suggestCompactProjectTitle({
-          repoRoot: workstream.repoRoot,
-          branch: workstream.branch,
-          firstUserMessages,
-        })
-        await putAutoTitle(workstream.id, suggestion.name, suggestion.summary)
-        recordActivity(`Auto-titled: "${suggestion.name}"`)
-        console.log(`[gogoagent/sidecar] auto-title ${workstream.id}: ${suggestion.name}`)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        recordError('autoTitle', message, workstream.id)
-        recordActivity(`Title suggestion failed for "${workstream.name}"`)
-        console.warn(`[gogoagent/sidecar] auto-title failed for ${workstream.id}: ${message}`)
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    recordError('autoTitleWorker', message)
-  }
-}
-
 async function buildSessionDetail(sessionId: string): Promise<SessionDetail | null> {
   const snapshot = await buildSnapshot()
   const session = snapshot.sessions.find((entry) => entry.id === sessionId)
@@ -761,6 +706,14 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/health') {
+    // Launchers may probe health without a token. If a caller does provide a
+    // token, reject stale credentials so a restarted renderer can re-read the
+    // new per-run token instead of appearing healthy with a dead bridge.
+    if (typeof req.headers.authorization === 'string' && !requestIsAuthorized(req, url)) {
+      res.writeHead(401, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Unauthorized' }))
+      return
+    }
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ ok: true, service: 'gogoagent-sidecar', lastActivity: getLastActivity() }))
     return
@@ -1269,10 +1222,10 @@ const server = http.createServer(async (req, res) => {
 
 async function startServer() {
   try {
-    const migration = await migrateLegacyClauderatorState({ terminalLogDir, cacheDir })
-    if (migration.terminalLogFilesCopied || migration.cacheEntriesImported) {
+    const migration = await migrateLegacyClauderatorState({ terminalLogDir, cacheDir, stateDir })
+    if (migration.terminalLogFilesCopied || migration.savedEntriesImported) {
       recordActivity(
-        `Imported legacy Clauderator state: ${migration.terminalLogFilesCopied} terminal files, ${migration.cacheEntriesImported} saved entries`,
+        `Imported legacy Clauderator state: ${migration.terminalLogFilesCopied} terminal files, ${migration.savedEntriesImported} saved entries`,
       )
     }
   } catch (error) {

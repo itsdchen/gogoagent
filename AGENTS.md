@@ -11,10 +11,10 @@ work, and leave it accurate when it hands off. Keep it short and never include
 tokens, private transcript contents, personal paths, or customer data.
 
 - Agent: Codex (current session)
-- Task: Commit the current gogoagent baseline, including the verified legacy-state migration.
+- Task: Bootstrap fresh installs, make ports explicit, migrate durable state, deduplicate naming, and stabilize terminal attention UX.
 - Started: 2026-07-20
-- Status / next step: Initial source-only baseline committed; next agent can continue normal product work from the imported local state.
-- Last verification: `corepack pnpm typecheck` passed; live review found 51 visible workstreams with retained legacy terminal logs and labels; staged-content check passed.
+- Status / next step: Approved startup/state fixes plus terminal switching and input-attention improvements are complete; test the rebuilt app, then commit after review.
+- Last verification: Typecheck, desktop build, prerequisite/shell/diff checks, expanded clean-start/auth/migration/input test, and explicit-port launcher test passed.
 
 ## Product
 

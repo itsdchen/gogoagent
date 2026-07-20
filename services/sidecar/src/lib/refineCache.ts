@@ -5,9 +5,13 @@ import path from 'node:path'
 import type { RefinedLesson } from '@gogoagent/shared'
 import { REFINE_PROMPT_VERSION } from './refineLessons.js'
 
-const CACHE_DIR =
-  process.env.GOGOAGENT_CACHE_DIR ?? path.join(os.homedir(), '.cache', 'gogoagent')
-const CACHE_FILE = path.join(CACHE_DIR, 'refined-lessons.json')
+const STATE_DIR =
+  process.env.GOGOAGENT_STATE_DIR ?? path.join(os.homedir(), '.gogoagent', 'state')
+const STATE_FILE = path.join(STATE_DIR, 'refined-lessons.json')
+const LEGACY_CACHE_FILE = path.join(
+  process.env.GOGOAGENT_CACHE_DIR ?? path.join(os.homedir(), '.cache', 'gogoagent'),
+  'refined-lessons.json',
+)
 
 // Cache key: hash(candidateId + candidateText + promptVersion). If either the
 // source text or the prompt changes, we re-refine.
@@ -23,14 +27,23 @@ interface CacheFile {
 }
 
 let memory: CacheFile | null = null
+let persistQueue = Promise.resolve()
 
 async function load(): Promise<CacheFile> {
   if (memory) return memory
+  let migratedFromCache = false
   try {
-    const text = await readFile(CACHE_FILE, 'utf8')
+    let text: string
+    try {
+      text = await readFile(STATE_FILE, 'utf8')
+    } catch {
+      text = await readFile(LEGACY_CACHE_FILE, 'utf8')
+      migratedFromCache = true
+    }
     const parsed = JSON.parse(text) as CacheFile
     if (parsed && parsed.entries && typeof parsed.entries === 'object') {
       memory = { version: parsed.version ?? REFINE_PROMPT_VERSION, entries: parsed.entries }
+      if (migratedFromCache) await persist().catch(() => undefined)
       return memory
     }
   } catch {
@@ -42,10 +55,15 @@ async function load(): Promise<CacheFile> {
 
 async function persist() {
   if (!memory) return
-  await mkdir(CACHE_DIR, { recursive: true })
-  const tmp = `${CACHE_FILE}.tmp`
-  await writeFile(tmp, JSON.stringify(memory, null, 2), 'utf8')
-  await rename(tmp, CACHE_FILE)
+  const payload = JSON.stringify(memory, null, 2)
+  const operation = persistQueue.then(async () => {
+    await mkdir(STATE_DIR, { recursive: true, mode: 0o700 })
+    const tmp = `${STATE_FILE}.${process.pid}.tmp`
+    await writeFile(tmp, payload, { encoding: 'utf8', mode: 0o600 })
+    await rename(tmp, STATE_FILE)
+  })
+  persistQueue = operation.catch(() => undefined)
+  await operation
 }
 
 export async function getCachedRefined(candidateId: string, candidateText: string) {
@@ -73,6 +91,6 @@ export async function getRefinedForSession(sessionId: string): Promise<RefinedLe
   return Object.values(cache.entries).filter((entry) => entry.sessionId === sessionId)
 }
 
-export function cachePaths() {
-  return { dir: CACHE_DIR, file: CACHE_FILE }
+export function statePaths() {
+  return { dir: STATE_DIR, file: STATE_FILE }
 }

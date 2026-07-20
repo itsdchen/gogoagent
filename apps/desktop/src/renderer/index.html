@@ -29,7 +29,8 @@
           <p class="meta" id="label-workstreams-status"></p>
         </div>
 
-        <section class="global-launch-panel" aria-label="New workstream">
+        <section class="global-launch-panel" aria-labelledby="global-launch-label">
+          <p id="global-launch-label" class="label">Start a workstream</p>
           <div class="new-workstream-row">
             <input
               id="global-cwd-input"
@@ -82,7 +83,7 @@
         <div id="app-notice" class="app-notice hidden" role="status" aria-live="polite"></div>
 
         <div id="project-detail-empty" class="empty-state large">
-          <p>Select a workstream.</p>
+          <p>Loading workstreams…</p>
         </div>
 
         <article id="project-detail" class="detail-stack hidden">

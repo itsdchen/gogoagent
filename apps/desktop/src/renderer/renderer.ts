@@ -196,6 +196,7 @@ const terminalViews = new Map<string, TerminalView>()
 let activeTerminalId: string | null = null
 let terminalOnlyCwd: string | null = null
 let terminalFitFrame: number | null = null
+let terminalFitGeneration = 0
 let terminalResizeObserver: ResizeObserver | null = null
 let timelineRenderVersion = 0
 let projectSelectionVersion = 0
@@ -283,6 +284,7 @@ interface TerminalView {
   pendingWrites: string[]
   writeFrame: number | null
   scrollAfterWrite?: boolean
+  scrollGeneration: number
 }
 
 interface CacheEntry<T> {
@@ -670,14 +672,12 @@ async function jumpToNeedsInputTerminal(projectId: string, terminalId?: string) 
   const view = targetId ? terminalViews.get(targetId) : undefined
   if (view) {
     selectTerminal(view.record.id)
-    settleTerminalAtBottom(view, { reveal: true })
     return
   }
 
   const fallback = currentWorkstreamTerminals().find(terminalNeedsInput)
   if (fallback) {
     selectTerminal(fallback.record.id)
-    settleTerminalAtBottom(fallback, { reveal: true })
   }
 }
 
@@ -1069,15 +1069,29 @@ function scrollTerminalViewportToBottom(view: TerminalView) {
 }
 
 function scrollTerminalToBottom(view: TerminalView, options: { settle?: boolean } = {}) {
+  const generation = ++view.scrollGeneration
   const delays = options.settle ? TERMINAL_SCROLL_SETTLE_DELAYS_MS : [0]
   for (const delay of delays) {
     const scroll = () => window.requestAnimationFrame(() => {
       if (terminalViews.get(view.record.id) !== view) return
+      if (view.scrollGeneration !== generation) return
       scrollTerminalViewportToBottom(view)
     })
     if (delay > 0) window.setTimeout(scroll, delay)
     else scroll()
   }
+  return generation
+}
+
+function focusTerminalWithoutPageScroll(view: TerminalView) {
+  const input = view.element.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')
+  if (input) {
+    input.focus({ preventScroll: true })
+    return
+  }
+  const previousScrollTop = contentRoot.scrollTop
+  view.terminal.focus()
+  contentRoot.scrollTop = previousScrollTop
 }
 
 function revealTerminalBottom(view: TerminalView) {
@@ -1088,17 +1102,25 @@ function revealTerminalBottom(view: TerminalView) {
   if (overflow > 0) contentRoot.scrollTop += overflow
 }
 
-function settleTerminalAtBottom(view: TerminalView | undefined, options: { reveal?: boolean } = {}) {
+function settleTerminalAtBottom(
+  view: TerminalView | undefined,
+  options: { reveal?: boolean; focus?: boolean } = {},
+) {
   if (!view) return
-  scrollTerminalToBottom(view, { settle: true })
+  const generation = scrollTerminalToBottom(view, { settle: true })
+  const isCurrent = () =>
+    terminalViews.get(view.record.id) === view &&
+    view.scrollGeneration === generation &&
+    view.record.id === activeTerminalId &&
+    !view.element.classList.contains('hidden')
   window.requestAnimationFrame(() => {
-    if (terminalViews.get(view.record.id) !== view) return
-    view.terminal.focus()
+    if (!isCurrent()) return
+    if (options.focus) focusTerminalWithoutPageScroll(view)
     if (options.reveal) revealTerminalBottom(view)
   })
   if (options.reveal) {
     window.setTimeout(() => {
-      if (terminalViews.get(view.record.id) !== view) return
+      if (!isCurrent()) return
       revealTerminalBottom(view)
     }, TERMINAL_SCROLL_SETTLE_DELAYS_MS[TERMINAL_SCROLL_SETTLE_DELAYS_MS.length - 1])
   }
@@ -1211,21 +1233,24 @@ function fitTerminalView(view: TerminalView | undefined) {
     const fallback = preferredTerminalSize(view)
     fitted = resizeTerminalToFit(view, fallback.cols, fallback.rows)
   }
-  scrollTerminalToBottom(view, { settle: true })
+  scrollTerminalToBottom(view)
   if (view.record.status === 'running') {
     void window.gogoagent.terminals.resize(view.record.id, fitted.cols, fitted.rows)
   }
 }
 
 function scheduleTerminalFit(view?: TerminalView) {
+  const generation = ++terminalFitGeneration
   if (terminalFitFrame !== null) window.cancelAnimationFrame(terminalFitFrame)
   terminalFitFrame = window.requestAnimationFrame(() => {
+    if (generation !== terminalFitGeneration) return
     terminalFitFrame = null
     const target = view ?? (activeTerminalId ? terminalViews.get(activeTerminalId) : undefined)
     fitTerminalView(target)
     if (target) {
       for (const delay of TERMINAL_REFIT_DELAYS_MS) {
         window.setTimeout(() => {
+          if (generation !== terminalFitGeneration) return
           if (terminalViews.get(target.record.id) !== target || target.record.id !== activeTerminalId) return
           fitTerminalView(target)
         }, delay)
@@ -1325,6 +1350,7 @@ function ensureTerminalView(record: TerminalSessionRecord) {
     pendingData: [],
     pendingWrites: [],
     writeFrame: null,
+    scrollGeneration: 0,
   }
   terminalViews.set(record.id, view)
   void restoreTerminalLog(view)
@@ -1338,11 +1364,9 @@ function selectTerminal(id: string | null) {
     view.element.classList.toggle('hidden', view.record.id !== id)
   }
   renderTerminalTabs()
-  renderTerminalStatus()
   if (id) {
     const view = terminalViews.get(id)
-    scheduleTerminalFit(view)
-    settleTerminalAtBottom(view, { reveal: true })
+    settleTerminalAtBottom(view, { reveal: true, focus: true })
   }
 }
 
@@ -1458,7 +1482,6 @@ async function activateOrCreateAgentTerminal(kind: AgentTerminalKind) {
   const running = currentDetail ? runningWorkstreamAgentTerminal(kind) : undefined
   if (running) {
     selectTerminal(running.record.id)
-    settleTerminalAtBottom(running, { reveal: true })
     return
   }
   await createTerminal(kind)
@@ -1692,7 +1715,9 @@ async function pasteResumeContextIntoTerminal(
     ? await buildBridgeContext(detail, targetKind)
     : await buildResumeContext(detail)
   await window.gogoagent.terminals.write(terminalId, terminalPastePayload(text))
-  view.terminal.focus()
+  if (activeTerminalId === terminalId && !view.element.classList.contains('hidden')) {
+    focusTerminalWithoutPageScroll(view)
+  }
   if (options.flash ?? true) flashButton(terminalPasteContextButton, 'Pasted')
   return true
 }
@@ -1723,12 +1748,17 @@ function setupTerminalEvents() {
     if (lastActivityAt) view.record.lastActivityAt = lastActivityAt
     const activityChanged = bumpProjectActivity(view.record.workstreamId, lastActivityAt)
     if (data) markWorkstreamUnread(view.record.workstreamId)
-    if (needsInput !== undefined) view.record.needsInput = needsInput
+    if (needsInput !== undefined) {
+      view.record.needsInput = needsInput
+      // The sidecar sees a rolling output window and is authoritative. Clear
+      // any renderer-only suppression when it recognizes an interactive prompt.
+      if (needsInput) view.needsInputSuppressed = false
+    }
     const needsInputSuppressionChanged = writeTerminalData(view, data, logBytes)
     renderTerminalStatus()
     if (needsInputChanged || needsInputSuppressionChanged) {
       if (terminalNeedsInput(view) && view.record.id === activeTerminalId) {
-        settleTerminalAtBottom(view, { reveal: true })
+        settleTerminalAtBottom(view)
       }
       projects = sortProjectsByActivity(projects)
       renderTerminalTabs()
@@ -1870,7 +1900,9 @@ function sortProjectsByActivity(items: Project[]) {
 }
 
 function archivedViewEmptyMessage() {
-  return showArchivedWorkstreams ? 'No archived workstreams.' : 'No projects yet. Work with Claude Code, then Reload.'
+  return showArchivedWorkstreams
+    ? 'No archived workstreams.'
+    : 'No workstreams yet. In the sidebar, enter a working directory and choose +, or work with Claude Code and Reload.'
 }
 
 function togglePinnedWorkstream(projectId: string) {
@@ -1935,9 +1967,9 @@ function renderProjectsList() {
       const liveTitle = `${liveCount} live terminal${liveCount === 1 ? '' : 's'} attached.${needsInputCount > 0 ? ` ${needsInputCount} waiting for user input.` : ''}`
       const liveIndicator = liveCount > 0
         ? `
-          <span class="project-live-indicator" title="${esc(liveTitle)}" aria-label="${esc(liveTitle)}">
+          <span class="project-live-indicator${needsInputCount > 0 ? ' needs-input' : ''}" title="${esc(liveTitle)}" aria-label="${esc(liveTitle)}">
             <span class="project-live-dot" aria-hidden="true"></span>
-            ${needsInputCount > 0 ? `<button class="project-input-indicator" type="button" data-input-project-id="${esc(project.id)}" data-input-terminal-id="${esc(needsInputIds[0] ?? '')}" title="Jump to waiting terminal." aria-label="Jump to waiting terminal">&gt;</button>` : ''}
+            ${needsInputCount > 0 ? `<button class="project-input-indicator" type="button" data-input-project-id="${esc(project.id)}" data-input-terminal-id="${esc(needsInputIds[0] ?? '')}" title="Jump to waiting terminal." aria-label="Jump to waiting terminal">Input</button>` : ''}
           </span>
         `
         : ''
@@ -2065,6 +2097,7 @@ function showEmptyDetail(message = 'Select a workstream.') {
 // ---------- Project detail ----------
 async function selectProject(projectId: string) {
   const selectionVersion = ++projectSelectionVersion
+  const switchedWorkstreams = selectedProjectId !== projectId
   const cachedDetail = getCachedValue(projectDetailCache, projectId, PROJECT_DETAIL_CACHE_MS)
   selectedProjectId = projectId
   clearWorkstreamUnread(projectId)
@@ -2076,6 +2109,7 @@ async function selectProject(projectId: string) {
   detailRoot.classList.remove('hidden')
   detailRoot.classList.remove('terminal-only')
   detailRoot.classList.remove('terminal-focus')
+  if (switchedWorkstreams) contentRoot.scrollTop = 0
 
   if (cachedDetail) {
     currentDetail = cachedDetail
@@ -3269,8 +3303,6 @@ function autoNameNewWorkstreams() {
   const newProjectIds = labelableProjects.map((project) => project.id).filter((id) => !seen.has(id))
   if (newProjectIds.length === 0) return
 
-  for (const project of labelableProjects) seen.add(project.id)
-  writeAutoNameSeenWorkstreams(seen)
   void labelWorkstreamNames({ projectIds: newProjectIds, automatic: true })
 }
 
@@ -3292,6 +3324,11 @@ async function labelWorkstreamNames(options: { projectIds?: string[]; automatic?
     : 'Starting label job...'
   try {
     const job = await window.gogoagent.workstreams.label({ projectIds: targetProjectIds })
+    if (options.automatic) {
+      const seen = readAutoNameSeenWorkstreams()
+      for (const projectId of targetProjectIds) seen.add(projectId)
+      writeAutoNameSeenWorkstreams(seen)
+    }
     pollLabelJob(job.jobId, { automatic: options.automatic })
   } catch (error) {
     const message = (error as Error).message
@@ -3403,7 +3440,13 @@ async function loadAllProjects() {
     if (selectedProjectId && projects.some((p) => p.id === selectedProjectId)) {
       await selectProject(selectedProjectId)
     } else if (selectedProjectId) {
-      showEmptyDetail(showArchivedWorkstreams ? 'Select an archived workstream.' : 'Select a workstream.')
+      showEmptyDetail(projects.length === 0
+        ? archivedViewEmptyMessage()
+        : showArchivedWorkstreams ? 'Select an archived workstream.' : 'Select a workstream.')
+    } else {
+      detailEmptyText.textContent = projects.length === 0
+        ? archivedViewEmptyMessage()
+        : showArchivedWorkstreams ? 'Select an archived workstream.' : 'Select a workstream.'
     }
     autoNameNewWorkstreams()
   } catch (error) {
@@ -3445,7 +3488,7 @@ newCodexButton.addEventListener('click', () => void activateOrCreateAgentTermina
 terminalCloseButton.addEventListener('click', () => void closeActiveTerminal())
 terminalHost.addEventListener('pointerdown', () => {
   const view = activeTerminalId ? terminalViews.get(activeTerminalId) : undefined
-  view?.terminal.focus()
+  if (view) focusTerminalWithoutPageScroll(view)
 })
 workstreamDigest.addEventListener('click', (event) => {
   const target = event.target

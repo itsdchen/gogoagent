@@ -2,19 +2,19 @@ import { copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from 'nod
 import os from 'node:os'
 import path from 'node:path'
 
-const CACHE_FILES = [
-  { name: 'auto-titles.json', sections: ['entries'] },
-  { name: 'workstream-labels.json', sections: ['entries'] },
-  { name: 'title-overrides.json', sections: ['sessions', 'projects'] },
-  { name: 'workstream-archive.json', sections: ['entries'] },
-  { name: 'refined-lessons.json', sections: ['entries'] },
+const SAVED_FILES = [
+  { name: 'auto-titles.json', sections: ['entries'], destination: 'cache' },
+  { name: 'workstream-labels.json', sections: ['entries'], destination: 'state' },
+  { name: 'title-overrides.json', sections: ['sessions', 'projects'], destination: 'state' },
+  { name: 'workstream-archive.json', sections: ['entries'], destination: 'state' },
+  { name: 'refined-lessons.json', sections: ['entries'], destination: 'state' },
 ] as const
 
 type JsonObject = Record<string, unknown>
 
 export interface LegacyMigrationResult {
   terminalLogFilesCopied: number
-  cacheEntriesImported: number
+  savedEntriesImported: number
 }
 
 async function fileExists(filePath: string) {
@@ -101,31 +101,32 @@ async function mergeCacheFile(
 export async function migrateLegacyClauderatorState(args: {
   terminalLogDir: string
   cacheDir: string
+  stateDir: string
 }): Promise<LegacyMigrationResult> {
   const homeDir = os.homedir()
   const markerPath = path.join(homeDir, '.gogoagent', 'migrations', 'clauderator-v1.json')
-  if (await fileExists(markerPath)) return { terminalLogFilesCopied: 0, cacheEntriesImported: 0 }
+  if (await fileExists(markerPath)) return { terminalLogFilesCopied: 0, savedEntriesImported: 0 }
 
   const legacyTerminalLogDir = path.join(homeDir, '.clauderator', 'terminal-logs')
   const legacyCacheDir = path.join(homeDir, '.cache', 'clauderator')
   const terminalLogFilesCopied = await copyMissingFiles(legacyTerminalLogDir, args.terminalLogDir)
 
-  let cacheEntriesImported = 0
-  for (const cacheFile of CACHE_FILES) {
-    cacheEntriesImported += await mergeCacheFile(
-      path.join(legacyCacheDir, cacheFile.name),
-      path.join(args.cacheDir, cacheFile.name),
-      cacheFile.sections,
+  let savedEntriesImported = 0
+  for (const savedFile of SAVED_FILES) {
+    savedEntriesImported += await mergeCacheFile(
+      path.join(legacyCacheDir, savedFile.name),
+      path.join(savedFile.destination === 'state' ? args.stateDir : args.cacheDir, savedFile.name),
+      savedFile.sections,
     )
   }
 
-  if (terminalLogFilesCopied > 0 || cacheEntriesImported > 0) {
+  if (terminalLogFilesCopied > 0 || savedEntriesImported > 0) {
     await writeJsonAtomically(markerPath, {
       version: '1',
       importedAt: new Date().toISOString(),
       terminalLogFilesCopied,
-      cacheEntriesImported,
+      savedEntriesImported,
     })
   }
-  return { terminalLogFilesCopied, cacheEntriesImported }
+  return { terminalLogFilesCopied, savedEntriesImported }
 }

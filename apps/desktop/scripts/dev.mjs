@@ -54,13 +54,6 @@ function isPortFree(port) {
   })
 }
 
-async function findFreePort(startPort) {
-  for (let port = startPort; port < startPort + 50; port += 1) {
-    if (await isPortFree(port)) return port
-  }
-  throw new Error(`could not find a free sidecar port starting at ${startPort}`)
-}
-
 async function waitForSidecar(timeoutMs = 15000) {
   const startedAt = Date.now()
   let lastError = 'not ready'
@@ -100,9 +93,10 @@ function printSidecarCleanupHint(port, reason) {
     console.warn(`[gogoagent/desktop] listener on port ${port}:`)
     console.warn(details)
   }
-  console.warn(`[gogoagent/desktop] cleanup: lsof -tiTCP:${port} -sTCP:LISTEN | xargs -r kill`)
+  console.warn(`[gogoagent/desktop] cleanup (ends live terminals if this is a sidecar): lsof -tiTCP:${port} -sTCP:LISTEN | xargs -r kill`)
   console.warn("[gogoagent/desktop] inspect: pgrep -af 'tsx.*src/index.ts|services/sidecar|gogoagent'")
-  console.warn('[gogoagent/desktop] force a fresh sidecar: GOGOAGENT_REUSE_SIDECAR=0 corepack pnpm --filter @gogoagent/desktop dev')
+  console.warn('[gogoagent/desktop] reuse a healthy sidecar: ./start.sh')
+  console.warn('[gogoagent/desktop] run separately on an explicit unused port: GOGOAGENT_PORT=43112 ./start.sh')
   console.warn('[gogoagent/desktop] stop sidecar on exit: GOGOAGENT_KEEP_SIDECAR_ON_EXIT=0 corepack pnpm --filter @gogoagent/desktop dev')
 }
 
@@ -145,22 +139,12 @@ build.on('exit', async (code) => {
   } else {
     if (existingSidecar) {
       printSidecarCleanupHint(Number(env.GOGOAGENT_PORT), 'A healthy gogoagent sidecar is already running.')
-      if (process.env.GOGOAGENT_PORT) {
-        console.error(`[gogoagent/desktop] ${sidecarBaseUrl()} is already serving a sidecar. Stop it first, choose a different GOGOAGENT_PORT, or set GOGOAGENT_REUSE_SIDECAR=1.`)
-        process.exit(1)
-      }
-      const devPort = await findFreePort(requestedPort + 1)
-      console.warn(`[gogoagent/desktop] ${sidecarBaseUrl()} already has a sidecar; starting this dev run on http://127.0.0.1:${devPort}`)
-      env.GOGOAGENT_PORT = String(devPort)
+      console.error(`[gogoagent/desktop] refusing to switch ports implicitly because that would hide this sidecar's live terminals. Reuse it, stop it first, or explicitly choose an unused GOGOAGENT_PORT.`)
+      process.exit(1)
     } else if (!(await isPortFree(Number(env.GOGOAGENT_PORT)))) {
-      printSidecarCleanupHint(Number(env.GOGOAGENT_PORT), 'The default port is occupied by a process that is not a healthy gogoagent sidecar. This launch will use the next available port.')
-      if (process.env.GOGOAGENT_PORT) {
-        console.error(`[gogoagent/desktop] port ${env.GOGOAGENT_PORT} is already in use. Stop that process or choose a different GOGOAGENT_PORT.`)
-        process.exit(1)
-      }
-      const devPort = await findFreePort(requestedPort + 1)
-      console.warn(`[gogoagent/desktop] port ${env.GOGOAGENT_PORT} is occupied; starting this dev run on http://127.0.0.1:${devPort}`)
-      env.GOGOAGENT_PORT = String(devPort)
+      printSidecarCleanupHint(Number(env.GOGOAGENT_PORT), 'The selected port is occupied by a process that is not a healthy gogoagent sidecar.')
+      console.error(`[gogoagent/desktop] refusing to switch ports implicitly. Stop that process or explicitly choose an unused GOGOAGENT_PORT.`)
+      process.exit(1)
     }
     sidecar = run('corepack', ['pnpm', sidecarDevScript], sidecarDir, { detached: true })
     if (keepSidecarOnExit) sidecar.unref()

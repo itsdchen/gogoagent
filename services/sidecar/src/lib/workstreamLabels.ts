@@ -9,9 +9,13 @@ import { clampTitle } from './utils.js'
 
 export const WORKSTREAM_LABEL_PROMPT_VERSION = 'v4'
 
-const CACHE_DIR =
-  process.env.GOGOAGENT_CACHE_DIR ?? path.join(os.homedir(), '.cache', 'gogoagent')
-const CACHE_FILE = path.join(CACHE_DIR, 'workstream-labels.json')
+const STATE_DIR =
+  process.env.GOGOAGENT_STATE_DIR ?? path.join(os.homedir(), '.gogoagent', 'state')
+const STATE_FILE = path.join(STATE_DIR, 'workstream-labels.json')
+const LEGACY_CACHE_FILE = path.join(
+  process.env.GOGOAGENT_CACHE_DIR ?? path.join(os.homedir(), '.cache', 'gogoagent'),
+  'workstream-labels.json',
+)
 const SMALL_TITLE_WORDS = new Set(['a', 'an', 'and', 'at', 'for', 'in', 'of', 'on', 'or', 'the', 'to', 'with'])
 const ACRONYM_TITLE_WORDS = new Set(['api', 'cli', 'css', 'hl', 'html', 'ipc', 'json', 'llm', 'qfx', 'ui', 'url'])
 const GENERIC_BRANCHES = new Set(['head', 'main', 'master', 'develop', 'development', 'dev'])
@@ -66,6 +70,7 @@ export interface WorkstreamLabelInput {
 }
 
 let memory: CacheFile | null = null
+let persistQueue = Promise.resolve()
 
 function clip(value: string, max: number) {
   const normalized = value.replace(/\s+/g, ' ').trim()
@@ -152,11 +157,19 @@ function finalizeLabel(input: WorkstreamLabelInput, value: string) {
 
 async function load(): Promise<CacheFile> {
   if (memory) return memory
+  let migratedFromCache = false
   try {
-    const text = await readFile(CACHE_FILE, 'utf8')
+    let text: string
+    try {
+      text = await readFile(STATE_FILE, 'utf8')
+    } catch {
+      text = await readFile(LEGACY_CACHE_FILE, 'utf8')
+      migratedFromCache = true
+    }
     const parsed = JSON.parse(text) as CacheFile
     if (parsed && parsed.entries && typeof parsed.entries === 'object') {
       memory = { version: parsed.version ?? WORKSTREAM_LABEL_PROMPT_VERSION, entries: parsed.entries }
+      if (migratedFromCache) await persist().catch(() => undefined)
       return memory
     }
   } catch {
@@ -168,10 +181,15 @@ async function load(): Promise<CacheFile> {
 
 async function persist() {
   if (!memory) return
-  await mkdir(CACHE_DIR, { recursive: true })
-  const tmp = `${CACHE_FILE}.${process.pid}.tmp`
-  await writeFile(tmp, JSON.stringify(memory, null, 2), 'utf8')
-  await rename(tmp, CACHE_FILE)
+  const payload = JSON.stringify(memory, null, 2)
+  const operation = persistQueue.then(async () => {
+    await mkdir(STATE_DIR, { recursive: true, mode: 0o700 })
+    const tmp = `${STATE_FILE}.${process.pid}.tmp`
+    await writeFile(tmp, payload, { encoding: 'utf8', mode: 0o600 })
+    await rename(tmp, STATE_FILE)
+  })
+  persistQueue = operation.catch(() => undefined)
+  await operation
 }
 
 function sessionMessagesForLabel(messages: SessionMessageRecord[]) {
@@ -242,6 +260,11 @@ export async function getManualWorkstreamLabel(workstreamId: string) {
   const cache = await load()
   const entry = cache.entries[workstreamId]
   return entry?.source === 'manual' ? entry.name : null
+}
+
+export async function getStoredWorkstreamLabelIds() {
+  const store = await load()
+  return new Set(Object.keys(store.entries))
 }
 
 export async function putCachedWorkstreamLabel(input: WorkstreamLabelInput, name: string) {
