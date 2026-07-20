@@ -1,0 +1,19 @@
+{
+  "name": "gogoagent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first observability for Claude Code agents.",
+  "packageManager": "pnpm@10.6.0",
+  "scripts": {
+    "build": "corepack pnpm -r build",
+    "dev": "corepack pnpm --filter @gogoagent/desktop dev",
+    "lint": "corepack pnpm -r lint",
+    "test:clean-start": "corepack pnpm --filter @gogoagent/shared build && corepack pnpm --filter @gogoagent/sidecar build && node scripts/clean-start-smoke.mjs",
+    "typecheck": "corepack pnpm --filter @gogoagent/shared build && corepack pnpm --filter @gogoagent/shared typecheck && corepack pnpm --filter @gogoagent/sidecar typecheck && corepack pnpm --filter @gogoagent/desktop typecheck"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "node-pty"
+    ]
+  }
+}

@@ -1,0 +1,3545 @@
+import type {
+  ArtifactRecord,
+  DebugState,
+  ExtractionCandidate,
+  Project,
+  ProjectDetail,
+  RefineJobStatus,
+  RefinedLesson,
+  SessionDetail,
+  SessionMessageRecord,
+  SessionRecord,
+  WorkLocationRecord,
+} from '@gogoagent/shared'
+
+type TerminalKind = 'shell' | 'claude' | 'codex'
+type AgentTerminalKind = Exclude<TerminalKind, 'shell'>
+type TerminalSessionRecord = Awaited<ReturnType<typeof window.gogoagent.terminals.list>>[number]
+type SessionOrder = 'oldest-first' | 'newest-first'
+
+interface DirectoryCompletionState {
+  source: string
+  suffix: string
+  completions: string[]
+  index: number
+}
+
+type IconName =
+  | 'archive'
+  | 'archive-restore'
+  | 'arrow-down'
+  | 'arrow-up'
+  | 'book-open'
+  | 'bot'
+  | 'bug'
+  | 'chevron-down'
+  | 'chevron-right'
+  | 'check'
+  | 'clipboard-paste'
+  | 'code-2'
+  | 'copy'
+  | 'folder-input'
+  | 'lightbulb'
+  | 'maximize-2'
+  | 'pin'
+  | 'pencil'
+  | 'plus'
+  | 'refresh-cw'
+  | 'scroll-text'
+  | 'settings'
+  | 'square'
+  | 'terminal'
+  | 'x'
+
+const ICON_PATHS: Record<IconName, string> = {
+  archive: '<rect width="20" height="5" x="2" y="3" rx="1"></rect><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path><path d="M10 12h4"></path>',
+  'archive-restore': '<rect width="20" height="5" x="2" y="3" rx="1"></rect><path d="M4 8v11a2 2 0 0 0 2 2h2"></path><path d="M20 8v11a2 2 0 0 1-2 2h-2"></path><path d="m9 15 3-3 3 3"></path><path d="M12 12v9"></path>',
+  'arrow-down': '<path d="M12 5v14"></path><path d="m19 12-7 7-7-7"></path>',
+  'arrow-up': '<path d="m5 12 7-7 7 7"></path><path d="M12 19V5"></path>',
+  'book-open': '<path d="M12 7v14"></path><path d="M3 18a1 1 0 0 1-1-1V5a2 2 0 0 1 2-2h5a3 3 0 0 1 3 3v15a3 3 0 0 0-3-3H3z"></path><path d="M21 18a1 1 0 0 0 1-1V5a2 2 0 0 0-2-2h-5a3 3 0 0 0-3 3v15a3 3 0 0 1 3-3h6z"></path>',
+  bot: '<path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path>',
+  bug: '<path d="m8 2 1.88 1.88"></path><path d="M14.12 3.88 16 2"></path><path d="M9 7.13v-1a3 3 0 1 1 6 0v1"></path><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"></path><path d="M12 20v-9"></path><path d="M6 13H2"></path><path d="M22 13h-4"></path><path d="m19 7-1.5 1.5"></path><path d="M5 7l1.5 1.5"></path>',
+  'chevron-down': '<path d="m6 9 6 6 6-6"></path>',
+  'chevron-right': '<path d="m9 18 6-6-6-6"></path>',
+  check: '<path d="M20 6 9 17l-5-5"></path>',
+  'clipboard-paste': '<path d="M15 2H9a1 1 0 0 0-1 1v2h8V3a1 1 0 0 0-1-1z"></path><path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"></path><path d="M16 4h2a2 2 0 0 1 2 2v7"></path><path d="M21 18h-8"></path><path d="m17 14 4 4-4 4"></path>',
+  'code-2': '<path d="m18 16 4-4-4-4"></path><path d="m6 8-4 4 4 4"></path><path d="m14.5 4-5 16"></path>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>',
+  'folder-input': '<path d="M2 6.5V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.7.9l.8 1.2a2 2 0 0 0 1.7.9H20a2 2 0 0 1 2 2v2"></path><path d="M2 13v5a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5"></path><path d="M12 10v8"></path><path d="m9 15 3 3 3-3"></path>',
+  lightbulb: '<path d="M15 14c.2-1 .7-1.7 1.5-2.5A5 5 0 1 0 7.5 11.5C8.3 12.3 8.8 13 9 14"></path><path d="M9 18h6"></path><path d="M10 22h4"></path><path d="M10 18a2 2 0 0 1-1-1.7V14h6v2.3a2 2 0 0 1-1 1.7"></path>',
+  'maximize-2': '<path d="M15 3h6v6"></path><path d="m21 3-7 7"></path><path d="M9 21H3v-6"></path><path d="m3 21 7-7"></path>',
+  pin: '<path d="M12 17v5"></path><path d="M5 17h14"></path><path d="M15 17V9l4-4V3H5v2l4 4v8"></path>',
+  pencil: '<path d="M21.2 6.8 17.2 2.8a2.4 2.4 0 0 0-3.4 0L3 13.6V21h7.4L21.2 10.2a2.4 2.4 0 0 0 0-3.4z"></path><path d="m14 4 6 6"></path>',
+  plus: '<path d="M5 12h14"></path><path d="M12 5v14"></path>',
+  'refresh-cw': '<path d="M3 12a9 9 0 0 1 15.7-6L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15.7 6L3 16"></path><path d="M8 16H3v5"></path>',
+  'scroll-text': '<path d="M15 12h-5"></path><path d="M15 8h-5"></path><path d="M19 17V5a2 2 0 0 0-2-2H4"></path><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v1a1 1 0 0 0 1 1h3"></path>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.72l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle>',
+  square: '<rect width="14" height="14" x="5" y="5" rx="2"></rect>',
+  terminal: '<path d="m4 17 6-6-6-6"></path><path d="M12 19h8"></path>',
+  x: '<path d="M18 6 6 18"></path><path d="m6 6 12 12"></path>',
+}
+
+function iconSvg(name: IconName): string {
+  return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON_PATHS[name]}</svg>`
+}
+
+function iconMarkup(name: IconName, className = 'button-icon'): string {
+  return `<span class="${className}" aria-hidden="true">${iconSvg(name)}</span>`
+}
+
+function terminalKindIcon(kind: TerminalKind): IconName {
+  if (kind === 'claude') return 'bot'
+  if (kind === 'codex') return 'code-2'
+  return 'terminal'
+}
+
+function hydrateIconPlaceholders(root: ParentNode = document) {
+  root.querySelectorAll<HTMLElement>('[data-icon]').forEach((element) => {
+    const name = element.dataset.icon
+    if (!name || !(name in ICON_PATHS)) return
+    element.innerHTML = iconSvg(name as IconName)
+  })
+}
+
+// ---------- DOM refs ----------
+const appNotice = document.querySelector('#app-notice') as HTMLElement
+const refreshButton = document.querySelector('#refresh-button') as HTMLButtonElement
+const labelWorkstreamsStatus = document.querySelector('#label-workstreams-status') as HTMLElement
+const projectsList = document.querySelector('#projects-list') as HTMLDivElement
+const projectsSearch = document.querySelector('#projects-search') as HTMLInputElement
+const showArchivedButton = document.querySelector('#show-archived-button') as HTMLButtonElement
+const globalCwdInput = document.querySelector('#global-cwd-input') as HTMLInputElement
+const globalUseCurrentButton = document.querySelector('#global-use-current-button') as HTMLButtonElement
+const newWorkstreamButton = document.querySelector('#new-workstream-button') as HTMLButtonElement
+const globalLaunchStatus = document.querySelector('#global-launch-status') as HTMLElement
+const contentRoot = document.querySelector('.content') as HTMLElement
+const detailEmpty = document.querySelector('#project-detail-empty') as HTMLDivElement
+const detailEmptyText = detailEmpty.querySelector('p') as HTMLParagraphElement
+const detailRoot = document.querySelector('#project-detail') as HTMLElement
+const detailTitle = document.querySelector('#detail-title') as HTMLElement
+const detailSubtitle = document.querySelector('#detail-subtitle') as HTMLElement
+const detailMeta = document.querySelector('#detail-meta') as HTMLElement
+const statusNoteInput = document.querySelector('#status-note-input') as HTMLInputElement
+const terminalCard = document.querySelector('#terminal-card') as HTMLElement
+const terminalTabs = document.querySelector('#terminal-tabs') as HTMLDivElement
+const terminalEmpty = document.querySelector('#terminal-empty') as HTMLDivElement
+const terminalHost = document.querySelector('#terminal-host') as HTMLDivElement
+const terminalActions = document.querySelector('#terminal-actions') as HTMLDivElement
+const terminalStatus = document.querySelector('#terminal-status') as HTMLElement
+const terminalHelp = document.querySelector('#terminal-help') as HTMLElement
+const newShellButton = document.querySelector('#new-shell-button') as HTMLButtonElement
+const newClaudeButton = document.querySelector('#new-claude-button') as HTMLButtonElement
+const newCodexButton = document.querySelector('#new-codex-button') as HTMLButtonElement
+const terminalCopyContextButton = document.querySelector('#terminal-copy-context-button') as HTMLButtonElement
+const terminalPasteContextButton = document.querySelector('#terminal-paste-context-button') as HTMLButtonElement
+const terminalCopyLogButton = document.querySelector('#terminal-copy-log-button') as HTMLButtonElement
+const terminalCloseButton = document.querySelector('#terminal-close-button') as HTMLButtonElement
+const workstreamDigest = document.querySelector('#workstream-digest') as HTMLDivElement
+const detailTimeline = document.querySelector('#detail-timeline') as HTMLDivElement
+const timelineToggleAllButton = document.querySelector('#timeline-toggle-all-button') as HTMLButtonElement
+const timelineOrderButton = document.querySelector('#timeline-order-button') as HTMLButtonElement
+const detailRefined = document.querySelector('#detail-refined') as HTMLDivElement
+const detailPaths = document.querySelector('#detail-paths') as HTMLDivElement
+const detailSessions = document.querySelector('#detail-sessions') as HTMLDivElement
+const refineButton = document.querySelector('#refine-button') as HTMLButtonElement
+const renameWorkstreamButton = document.querySelector('#rename-workstream-button') as HTMLButtonElement
+const transcriptButton = document.querySelector('#transcript-button') as HTMLButtonElement
+const headerCopyContextButton = document.querySelector('#header-copy-context-button') as HTMLButtonElement
+const archiveWorkstreamButton = document.querySelector('#archive-workstream-button') as HTMLButtonElement
+const refineStatus = document.querySelector('#refine-status') as HTMLElement
+const suggestTitleButton = document.querySelector('#suggest-title-button') as HTMLButtonElement
+const terminalFocusButton = document.querySelector('#terminal-focus-button') as HTMLButtonElement
+const footerStats = document.querySelector('#footer-stats') as HTMLElement
+const footerActivity = document.querySelector('#footer-activity') as HTMLElement
+
+const settingsToggle = document.querySelector('#settings-toggle') as HTMLButtonElement
+const settingsDialog = document.querySelector('#settings-dialog') as HTMLDialogElement
+const sessionOrderOldestInput = document.querySelector('#session-order-oldest') as HTMLInputElement
+const sessionOrderNewestInput = document.querySelector('#session-order-newest') as HTMLInputElement
+const contextClaudeToCodexInput = document.querySelector('#context-claude-to-codex') as HTMLInputElement
+const contextCodexToClaudeInput = document.querySelector('#context-codex-to-claude') as HTMLInputElement
+
+const debugToggle = document.querySelector('#debug-toggle') as HTMLButtonElement
+const debugDialog = document.querySelector('#debug-dialog') as HTMLDialogElement
+const debugLastScan = document.querySelector('#debug-last-scan') as HTMLElement
+const debugPathsList = document.querySelector('#debug-paths') as HTMLUListElement
+const debugStepsList = document.querySelector('#debug-steps') as HTMLUListElement
+const debugCountsList = document.querySelector('#debug-counts') as HTMLUListElement
+const debugErrorsList = document.querySelector('#debug-errors') as HTMLUListElement
+const debugRescanButton = document.querySelector('#debug-rescan-button') as HTMLButtonElement
+
+const transcriptDialog = document.querySelector('#transcript-dialog') as HTMLDialogElement
+const transcriptSubtitle = document.querySelector('#transcript-subtitle') as HTMLElement
+const transcriptTitle = document.querySelector('#transcript-title') as HTMLElement
+const transcriptMeta = document.querySelector('#transcript-meta') as HTMLElement
+const transcriptSearch = document.querySelector('#transcript-search') as HTMLInputElement
+const transcriptBody = document.querySelector('#transcript-body') as HTMLDivElement
+const copyTranscriptButton = document.querySelector('#copy-transcript-button') as HTMLButtonElement
+
+const renameInput = document.querySelector('#rename-input') as HTMLInputElement
+const renameStatus = document.querySelector('#rename-status') as HTMLElement
+const renameSaveButton = document.querySelector('#rename-save-button') as HTMLButtonElement
+const renameCancelButton = document.querySelector('#rename-cancel-button') as HTMLButtonElement
+
+// ---------- State ----------
+let projects: Project[] = []
+let selectedProjectId: string | null = null
+let currentDetail: ProjectDetail | null = null
+let refinePollTimer: number | null = null
+let labelPollTimer: number | null = null
+let labelJobInFlight = false
+let showArchivedWorkstreams = false
+let activeTranscript: TranscriptView | null = null
+const projectDetailCache = new Map<string, CacheEntry<ProjectDetail>>()
+const sessionDetailCache = new Map<string, CacheEntry<SessionDetail>>()
+const terminalViews = new Map<string, TerminalView>()
+let activeTerminalId: string | null = null
+let terminalOnlyCwd: string | null = null
+let terminalFitFrame: number | null = null
+let terminalResizeObserver: ResizeObserver | null = null
+let timelineRenderVersion = 0
+let projectSelectionVersion = 0
+let cwdCompletionState: DirectoryCompletionState | null = null
+let cwdCompletionInFlight = false
+
+const GLOBAL_CWD_STORAGE_KEY = 'gogoagent.globalCwd'
+const AUTO_NAME_SEEN_STORAGE_KEY = 'gogoagent.autoNameSeenWorkstreams.v4'
+const SESSION_ORDER_STORAGE_KEY = 'gogoagent.sessionOrder.v1'
+const COLLAPSED_TIMELINE_SESSIONS_STORAGE_KEY = 'gogoagent.collapsedTimelineSessions.v1'
+const PINNED_WORKSTREAMS_STORAGE_KEY = 'gogoagent.pinnedWorkstreams.v1'
+const TERMINAL_FOCUS_WORKSTREAMS_STORAGE_KEY = 'gogoagent.terminalFocusWorkstreams.v1'
+const STATUS_NOTES_STORAGE_KEY = 'gogoagent.workstreamStatusNotes.v1'
+const CONTEXT_SHARING_STORAGE_KEY = 'gogoagent.contextSharing.v1'
+
+function migrateSpoolLocalStorage() {
+  try {
+    const legacyPrefix = 'spool.'
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (!key?.startsWith(legacyPrefix)) continue
+      const replacement = `gogoagent.${key.slice(legacyPrefix.length)}`
+      if (localStorage.getItem(replacement) === null) {
+        localStorage.setItem(replacement, localStorage.getItem(key) ?? '')
+      }
+    }
+  } catch {
+    // Storage may be unavailable in restrictive renderer environments.
+  }
+}
+
+migrateSpoolLocalStorage()
+
+const TERMINAL_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, monospace'
+const TERMINAL_FONT_SIZE = 13
+const TERMINAL_LINE_HEIGHT = 1.25
+const TERMINAL_BOTTOM_RESERVE_ROWS = 2
+const TERMINAL_BOTTOM_GUTTER_PX = 12
+const TERMINAL_SCROLLBAR_GUTTER_PX = 14
+const TERMINAL_FIT_MAX_TRIM_PASSES = 4
+const TERMINAL_REFIT_DELAYS_MS = [80, 250] as const
+const TERMINAL_SCROLL_SETTLE_DELAYS_MS = [0, 60, 160, 320] as const
+const TIMELINE_DETAIL_CONCURRENCY = 4
+const PROJECT_DETAIL_CACHE_MS = 60_000
+const SESSION_DETAIL_CACHE_MS = 60_000
+const PROJECT_ACTIVITY_UI_THROTTLE_MS = 15_000
+const RESUME_TRANSCRIPT_SESSION_LIMIT = 4
+const RESUME_TRANSCRIPT_MESSAGE_LIMIT = 28
+const RESUME_TRANSCRIPT_MESSAGE_CHARS = 1200
+const RESUME_TRANSCRIPT_CHAR_BUDGET = 18_000
+const BRIDGE_SESSION_LIMIT = 2
+const BRIDGE_CANDIDATE_LIMIT = 12
+let sessionOrder: SessionOrder = readSessionOrder()
+const collapsedTimelineSessions = readCollapsedTimelineSessions()
+const expandedTimelineCards = new Set<string>()
+const pinnedWorkstreamIds = readStringSet(PINNED_WORKSTREAMS_STORAGE_KEY)
+const terminalFocusWorkstreamIds = readStringSet(TERMINAL_FOCUS_WORKSTREAMS_STORAGE_KEY)
+const statusNotesByWorkstream = readStringRecord(STATUS_NOTES_STORAGE_KEY)
+let contextSharingSettings = readContextSharingSettings()
+const unreadWorkstreamIds = new Set<string>()
+const projectActivityRenderedAt = new Map<string, number>()
+
+interface TranscriptSection {
+  session: SessionRecord
+  artifacts: ArtifactRecord[]
+  candidates: ExtractionCandidate[]
+  messages: SessionMessageRecord[]
+}
+
+interface TranscriptView {
+  title: string
+  subtitle: string
+  meta: string
+  sections: TranscriptSection[]
+}
+
+interface TerminalView {
+  record: TerminalSessionRecord
+  terminal: InstanceType<typeof window.Terminal>
+  fitAddon?: FitAddonInstance
+  element: HTMLDivElement
+  logRestored: boolean
+  needsInputSuppressed?: boolean
+  pendingData: Array<{ data: string; logBytes?: number }>
+  pendingWrites: string[]
+  writeFrame: number | null
+  scrollAfterWrite?: boolean
+}
+
+interface CacheEntry<T> {
+  value: T
+  cachedAt: number
+}
+
+interface TimelineMessageGroup {
+  role: SessionMessageRecord['role']
+  messages: SessionMessageRecord[]
+}
+
+interface ContextSharingSettings {
+  claudeToCodex: boolean
+  codexToClaude: boolean
+}
+
+interface WorkstreamDigestItem {
+  label: string
+  value: string
+  detail?: string
+  tone?: 'attention' | 'muted'
+  terminalId?: string
+}
+
+// ---------- Helpers ----------
+function readStringSet(storageKey: string) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(storageKey) ?? '[]') as unknown
+    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [])
+  } catch {
+    return new Set<string>()
+  }
+}
+
+function saveStringSet(storageKey: string, values: Set<string>) {
+  localStorage.setItem(storageKey, JSON.stringify([...values]))
+}
+
+function readStringRecord(storageKey: string) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(storageKey) ?? '{}') as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return new Map<string, string>()
+    return new Map(
+      Object.entries(parsed)
+        .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    )
+  } catch {
+    return new Map<string, string>()
+  }
+}
+
+function saveStringRecord(storageKey: string, values: Map<string, string>) {
+  localStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(values)))
+}
+
+function readContextSharingSettings(): ContextSharingSettings {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CONTEXT_SHARING_STORAGE_KEY) ?? '{}') as Partial<ContextSharingSettings>
+    return {
+      claudeToCodex: parsed.claudeToCodex !== false,
+      codexToClaude: parsed.codexToClaude !== false,
+    }
+  } catch {
+    return { claudeToCodex: true, codexToClaude: true }
+  }
+}
+
+function saveContextSharingSettings() {
+  localStorage.setItem(CONTEXT_SHARING_STORAGE_KEY, JSON.stringify(contextSharingSettings))
+}
+
+function workstreamStatusNote(workstreamId: string) {
+  return statusNotesByWorkstream.get(workstreamId)?.trim() ?? ''
+}
+
+function setWorkstreamStatusNote(workstreamId: string, note: string) {
+  const trimmed = note.replace(/\s+/g, ' ').trim()
+  if (trimmed) statusNotesByWorkstream.set(workstreamId, trimmed)
+  else statusNotesByWorkstream.delete(workstreamId)
+  saveStringRecord(STATUS_NOTES_STORAGE_KEY, statusNotesByWorkstream)
+  renderProjectsList()
+}
+
+function readSessionOrder(): SessionOrder {
+  const value = localStorage.getItem(SESSION_ORDER_STORAGE_KEY)
+  return value === 'newest-first' ? 'newest-first' : 'oldest-first'
+}
+
+function readCollapsedTimelineSessions() {
+  return readStringSet(COLLAPSED_TIMELINE_SESSIONS_STORAGE_KEY)
+}
+
+function saveCollapsedTimelineSessions() {
+  saveStringSet(COLLAPSED_TIMELINE_SESSIONS_STORAGE_KEY, collapsedTimelineSessions)
+}
+
+function sortSessionsForDisplay<T extends Pick<SessionRecord, 'startedAt'>>(sessions: T[]) {
+  return sessions.slice().sort((a, b) => (
+    sessionOrder === 'oldest-first'
+      ? a.startedAt.localeCompare(b.startedAt)
+      : b.startedAt.localeCompare(a.startedAt)
+  ))
+}
+
+function esc(text: string): string {
+  return text.replace(/[&<>"']/g, (ch) => {
+    switch (ch) {
+      case '&': return '&amp;'
+      case '<': return '&lt;'
+      case '>': return '&gt;'
+      case '"': return '&quot;'
+      default: return '&#39;'
+    }
+  })
+}
+
+function buttonContent(icon: IconName, label: string): string {
+  return `${iconMarkup(icon)}<span class="button-label">${esc(label)}</span>`
+}
+
+function fmtRelative(iso?: string): string {
+  if (!iso) return '—'
+  const then = Date.parse(iso)
+  if (!Number.isFinite(then)) return iso
+  const diff = Date.now() - then
+  const min = 60 * 1000
+  const hr = 60 * min
+  const day = 24 * hr
+  if (diff < min) return 'just now'
+  if (diff < hr) return `${Math.round(diff / min)}m ago`
+  if (diff < day) return `${Math.round(diff / hr)}h ago`
+  if (diff < 30 * day) return `${Math.round(diff / day)}d ago`
+  return new Date(then).toISOString().slice(0, 10)
+}
+
+function compactPath(value: string): string {
+  return value.replace(/^\/home\/[^/]+(?=\/|$)/, '~')
+}
+
+function fmtDateRange(firstIso: string, lastIso: string): string {
+  const first = firstIso.slice(0, 10)
+  const last = lastIso.slice(0, 10)
+  return first === last ? first : `${first} → ${last}`
+}
+
+function fmtNumber(value: number | undefined): string {
+  if (!value) return '0'
+  return new Intl.NumberFormat().format(value)
+}
+
+function fmtBytes(value: number | undefined): string {
+  if (!value) return '0 B'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function fmtDuration(ms: number | undefined): string {
+  if (!ms || ms < 60_000) return '<1m'
+  const minutes = Math.round(ms / 60_000)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const remainder = minutes % 60
+  return remainder ? `${hours}h ${remainder}m` : `${hours}h`
+}
+
+function renderEmpty(target: HTMLElement, text: string) {
+  target.innerHTML = `<p class="empty">${esc(text)}</p>`
+}
+
+function setAppNotice(message: string) {
+  appNotice.textContent = message
+  appNotice.classList.toggle('hidden', message.length === 0)
+}
+
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', 'true')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  textarea.remove()
+}
+
+function recordTerminalInput(view: TerminalView, data: string) {
+  const activityAt = new Date().toISOString()
+  view.record.lastActivityAt = activityAt
+  bumpProjectActivity(view.record.workstreamId, activityAt)
+  void window.gogoagent.terminals.write(view.record.id, data)
+}
+
+function copyTerminalSelection(view: TerminalView) {
+  if (!view.terminal.hasSelection?.()) return false
+  const selection = view.terminal.getSelection?.() ?? ''
+  if (!selection) return false
+  void copyText(selection)
+    .then(() => {
+      if (terminalViews.get(view.record.id) === view) terminalStatus.textContent = 'Selection copied'
+    })
+    .catch((error) => {
+      if (terminalViews.get(view.record.id) === view) terminalStatus.textContent = `Selection copy failed: ${(error as Error).message}`
+    })
+  view.terminal.clearSelection?.()
+  return true
+}
+
+function pasteClipboardIntoTerminal(view: TerminalView) {
+  if (!navigator.clipboard?.readText) return false
+  void navigator.clipboard.readText()
+    .then((text) => {
+      if (!text || terminalViews.get(view.record.id) !== view) return
+      if (view.terminal.paste) {
+        view.terminal.paste(text)
+      } else {
+        recordTerminalInput(view, text)
+      }
+    })
+    .catch((error) => {
+      if (terminalViews.get(view.record.id) === view) terminalStatus.textContent = `Paste failed: ${(error as Error).message}`
+    })
+  return true
+}
+
+function flashButton(button: HTMLButtonElement, label: string) {
+  const labelElement = button.querySelector<HTMLElement>('.button-label')
+  if (labelElement) {
+    const original = labelElement.textContent ?? ''
+    labelElement.textContent = label
+    window.setTimeout(() => {
+      labelElement.textContent = original
+    }, 1400)
+    return
+  }
+
+  const original = button.textContent ?? ''
+  button.textContent = label
+  window.setTimeout(() => {
+    button.textContent = original
+  }, 1400)
+}
+
+function highlight(text: string, query: string): string {
+  const q = query.trim().toLowerCase()
+  if (!q) return esc(text)
+  const lower = text.toLowerCase()
+  let cursor = 0
+  let html = ''
+  while (cursor < text.length) {
+    const index = lower.indexOf(q, cursor)
+    if (index === -1) {
+      html += esc(text.slice(cursor))
+      break
+    }
+    html += esc(text.slice(cursor, index))
+    html += `<mark>${esc(text.slice(index, index + q.length))}</mark>`
+    cursor = index + q.length
+  }
+  return html
+}
+
+function stripAnsi(text: string): string {
+  return text
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+}
+
+function getCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string, ttlMs: number) {
+  const entry = cache.get(key)
+  if (!entry) return null
+  if (Date.now() - entry.cachedAt > ttlMs) {
+    cache.delete(key)
+    return null
+  }
+  return entry.value
+}
+
+function setCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T) {
+  cache.set(key, { value, cachedAt: Date.now() })
+}
+
+function pruneCache<T>(cache: Map<string, CacheEntry<T>>, ttlMs: number) {
+  const now = Date.now()
+  for (const [key, entry] of cache) {
+    if (now - entry.cachedAt > ttlMs) cache.delete(key)
+  }
+}
+
+async function getProjectDetail(projectId: string) {
+  const detail = await window.gogoagent.projects.get(projectId)
+  setCachedValue(projectDetailCache, projectId, detail)
+  return detail
+}
+
+async function getSessionDetail(sessionId: string) {
+  const cached = getCachedValue(sessionDetailCache, sessionId, SESSION_DETAIL_CACHE_MS)
+  if (cached) return cached
+  const detail = await window.gogoagent.sessions.get(sessionId)
+  setCachedValue(sessionDetailCache, sessionId, detail)
+  return detail
+}
+
+function currentWorkstreamTerminals() {
+  return [...terminalViews.values()]
+    .filter((view) => {
+      if (selectedProjectId) return view.record.workstreamId === selectedProjectId
+      return !view.record.workstreamId || view.record.id === activeTerminalId
+    })
+    .sort((a, b) => a.record.startedAt.localeCompare(b.record.startedAt))
+}
+
+function sameStringArray(a: string[] | undefined, b: string[] | undefined) {
+  const left = a ?? []
+  const right = b ?? []
+  if (left.length !== right.length) return false
+  return left.every((value, index) => value === right[index])
+}
+
+function bumpProjectActivity(workstreamId: string | undefined, timestamp = new Date().toISOString()) {
+  if (!workstreamId || showArchivedWorkstreams) return false
+
+  const project = projects.find((entry) => entry.id === workstreamId)
+  if (!project || timestamp.localeCompare(project.lastUpdatedAt) <= 0) return false
+
+  const nowMs = Date.now()
+  const previousMs = Date.parse(project.lastUpdatedAt)
+  const nextMs = Date.parse(timestamp)
+  const lastRenderedMs = projectActivityRenderedAt.get(workstreamId) ?? 0
+  const staleEnoughToShow =
+    !Number.isFinite(previousMs) ||
+    !Number.isFinite(nextMs) ||
+    nextMs - previousMs >= 60_000
+  const shouldRender =
+    staleEnoughToShow ||
+    nowMs - lastRenderedMs >= PROJECT_ACTIVITY_UI_THROTTLE_MS
+
+  if (!shouldRender) return false
+
+  projectActivityRenderedAt.set(workstreamId, nowMs)
+  projects = sortProjectsByActivity(projects.map((entry) => (
+    entry.id === workstreamId ? { ...entry, lastUpdatedAt: timestamp } : entry
+  )))
+
+  if (currentDetail?.project.id === workstreamId && timestamp.localeCompare(currentDetail.project.lastUpdatedAt) > 0) {
+    const updatedProject = { ...currentDetail.project, lastUpdatedAt: timestamp }
+    currentDetail = { ...currentDetail, project: updatedProject }
+    setCachedValue(projectDetailCache, workstreamId, currentDetail)
+    renderDetailMeta(updatedProject)
+  }
+
+  renderProjectsList()
+  return true
+}
+
+function projectNeedsInputTerminalIds(project: Project) {
+  const ids = new Set(project.needsInputTerminalIds ?? [])
+  for (const terminalId of project.activeTerminalIds ?? []) {
+    const view = terminalViews.get(terminalId)
+    if (!view || view.record.status !== 'running') continue
+    if (terminalNeedsInput(view)) ids.add(terminalId)
+    else ids.delete(terminalId)
+  }
+  return [...ids]
+}
+
+function projectFirstNeedsInputTerminalId(project: Project | undefined) {
+  if (!project) return undefined
+  return projectNeedsInputTerminalIds(project)[0]
+}
+
+async function jumpToNeedsInputTerminal(projectId: string, terminalId?: string) {
+  const project = projects.find((entry) => entry.id === projectId)
+  const targetId = terminalId ?? projectFirstNeedsInputTerminalId(project)
+  if (selectedProjectId !== projectId) {
+    await selectProject(projectId)
+  }
+
+  const view = targetId ? terminalViews.get(targetId) : undefined
+  if (view) {
+    selectTerminal(view.record.id)
+    settleTerminalAtBottom(view, { reveal: true })
+    return
+  }
+
+  const fallback = currentWorkstreamTerminals().find(terminalNeedsInput)
+  if (fallback) {
+    selectTerminal(fallback.record.id)
+    settleTerminalAtBottom(fallback, { reveal: true })
+  }
+}
+
+function normalizedTerminalText(data: string) {
+  return stripAnsi(data)
+    .replace(/\u00a0/g, ' ')
+    .replace(/\r/g, '\n')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function updateTerminalNeedsInputSuppression(view: TerminalView, data: string) {
+  if (!data) return false
+
+  const text = normalizedTerminalText(data)
+  if (!text) return false
+
+  const shouldSuppress = /\bno response requested\b/i.test(text)
+    || /\bno need to (?:check in|respond)\b/i.test(text)
+    || /\bi'?ll (?:ping|come back|let you know)\b/i.test(text)
+    || /\b(?:shells?|commands?|jobs?) still running\b/i.test(text)
+    || /\bbackground command\b/i.test(text)
+    || /\bwaiting on (?:the )?background\b/i.test(text)
+    || /\bwaiting on .* to complete\b/i.test(text)
+  const shouldClearSuppression = /\b(?:awaiting|waiting for|needs) (?:user )?input\b/i.test(text)
+    || /\binput required\b/i.test(text)
+    || /\bapproval required\b/i.test(text)
+    || /\bpress (?:enter|y|n)\b/i.test(text)
+    || /\benter to select\b/i.test(text)
+    || /\bselect (?:one|an option)\b/i.test(text)
+    || /\bchoose (?:one|an option|a number)\b/i.test(text)
+    || /\bi need from you\b/i.test(text)
+    || /\bplease (?:confirm|provide|choose|select|approve)\b/i.test(text)
+    || /\bdo you want to\b/i.test(text)
+
+  const next = shouldSuppress ? true : shouldClearSuppression ? false : view.needsInputSuppressed ?? false
+  if ((view.needsInputSuppressed ?? false) === next) return false
+  view.needsInputSuppressed = next
+  return true
+}
+
+function terminalNeedsInput(view: TerminalView) {
+  return view.record.status === 'running' && Boolean(view.record.needsInput) && !view.needsInputSuppressed
+}
+
+function loadedSessionDetails(detail: ProjectDetail) {
+  return detail.sessions
+    .map((session) => getCachedValue(sessionDetailCache, session.id, SESSION_DETAIL_CACHE_MS))
+    .filter((sessionDetail): sessionDetail is SessionDetail => Boolean(sessionDetail))
+}
+
+function digestText(text: string, max = 180) {
+  return clampText(stripAnsi(text).replace(/\s+/g, ' ').trim(), max)
+}
+
+function digestRoleLabel(role: SessionMessageRecord['role']) {
+  if (role === 'assistant') return 'Agent'
+  return role
+}
+
+function isUsefulDigestMessage(message: SessionMessageRecord) {
+  if (message.role !== 'assistant') return false
+  if (isTimelineNoiseMessage(message)) return false
+  const text = digestText(message.text, 600)
+  if (text.length < 8) return false
+  if (/^\[(?:earlier|older) terminal (?:output|log) omitted/i.test(text)) return false
+  if (/<local-command-/i.test(text)) return false
+  if (/^\[request interrupted by user\]/i.test(text)) return false
+  if (/^\[terminal log is empty\]/i.test(text)) return false
+  if (/^(ran \d+ shell command|baked for|cogitated for)\b/i.test(text)) return false
+  if (/^gogoagent terminal log title\b/i.test(text)) return false
+  return true
+}
+
+function digestTerminalState(): WorkstreamDigestItem {
+  const terminals = currentWorkstreamTerminals()
+  if (!terminals.length) {
+    return {
+      label: 'Terminal',
+      value: 'No live terminal',
+      tone: 'muted',
+    }
+  }
+
+  const running = terminals.filter((view) => view.record.status === 'running')
+  const needingInput = terminals.filter(terminalNeedsInput)
+  const detail = terminals
+    .slice(-3)
+    .map((view) => {
+      const state = terminalNeedsInput(view) ? 'needs input' : view.record.status
+      const activeAt = view.record.lastActivityAt ?? view.record.endedAt ?? view.record.startedAt
+      return `${terminalLabel(view.record.kind)} ${state} · ${fmtRelative(activeAt)}`
+    })
+    .join(' · ')
+
+  if (needingInput.length) {
+    return {
+      label: 'Terminal',
+      value: `${needingInput.length} needs input`,
+      detail,
+      tone: 'attention',
+      terminalId: needingInput[0]?.record.id,
+    }
+  }
+
+  return {
+    label: 'Terminal',
+    value: running.length
+      ? `${running.length} running`
+      : `${terminals.length} terminal${terminals.length === 1 ? '' : 's'} attached`,
+    detail,
+  }
+}
+
+function latestDigestAction(detail: ProjectDetail): WorkstreamDigestItem {
+  const latestMessage = loadedSessionDetails(detail)
+    .flatMap((sessionDetail) => sessionDetail.messages.map((message) => ({ session: sessionDetail.session, message })))
+    .filter(({ message }) => isUsefulDigestMessage(message))
+    .sort((a, b) => b.message.timestamp.localeCompare(a.message.timestamp))[0]
+
+  if (latestMessage) {
+    return {
+      label: 'Latest',
+      value: `${digestRoleLabel(latestMessage.message.role)}: ${digestText(latestMessage.message.text)}`,
+      detail: `${latestMessage.session.title || latestMessage.session.id} · ${fmtRelative(latestMessage.message.timestamp)}`,
+    }
+  }
+
+  const latestSession = detail.sessions
+    .slice()
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+  return {
+    label: 'Latest',
+    value: latestSession ? latestSession.title || latestSession.id : 'No session activity yet',
+    detail: latestSession ? `updated ${fmtRelative(latestSession.updatedAt)}` : undefined,
+    tone: latestSession ? undefined : 'muted',
+  }
+}
+
+function openLoopDigest(detail: ProjectDetail): WorkstreamDigestItem {
+  const latestTodo = loadedSessionDetails(detail)
+    .slice()
+    .sort((a, b) => b.session.updatedAt.localeCompare(a.session.updatedAt))
+    .flatMap((sessionDetail) => (
+      sessionDetail.candidates
+        .filter((candidate) => candidate.kind === 'todo')
+        .map((candidate) => ({ session: sessionDetail.session, candidate }))
+    ))[0]
+
+  if (latestTodo) {
+    return {
+      label: 'Open loop',
+      value: digestText(latestTodo.candidate.text),
+      detail: latestTodo.session.title || latestTodo.session.id,
+    }
+  }
+
+  const loopMessage = loadedSessionDetails(detail)
+    .flatMap((sessionDetail) => sessionDetail.messages.map((message) => ({ session: sessionDetail.session, message })))
+    .filter(({ message }) => {
+      if (!isUsefulDigestMessage(message)) return false
+      const text = digestText(message.text, 600)
+      if (/\bno need to (?:check in|respond)\b/i.test(text)) return false
+      return /\b(?:blocked|waiting|still running|remaining|todo|next|follow up|once .* finish|need to|needs to)\b/i.test(text)
+    })
+    .sort((a, b) => b.message.timestamp.localeCompare(a.message.timestamp))[0]
+
+  if (loopMessage) {
+    return {
+      label: 'Open loop',
+      value: digestText(loopMessage.message.text),
+      detail: `${loopMessage.session.title || loopMessage.session.id} · ${fmtRelative(loopMessage.message.timestamp)}`,
+    }
+  }
+
+  return {
+    label: 'Open loop',
+    value: 'No explicit open loop detected',
+    tone: 'muted',
+  }
+}
+
+function renderWorkstreamDigest(detail: ProjectDetail) {
+  const statusNote = workstreamStatusNote(detail.project.id)
+  const items: WorkstreamDigestItem[] = [
+    statusNote
+      ? { label: 'Status', value: statusNote }
+      : {
+          label: 'Status',
+          value: `${detail.project.sessionCount} session${detail.project.sessionCount === 1 ? '' : 's'} · active ${fmtRelative(detail.project.lastUpdatedAt)}`,
+          detail: compactPath(detail.project.repoRoot),
+          tone: 'muted',
+        },
+    digestTerminalState(),
+    latestDigestAction(detail),
+    openLoopDigest(detail),
+  ]
+
+  workstreamDigest.innerHTML = items
+    .map((item) => `
+      <div
+        class="workstream-digest-row${item.tone ? ` ${esc(item.tone)}` : ''}${item.terminalId ? ' actionable' : ''}"
+        ${item.terminalId ? `data-terminal-id="${esc(item.terminalId)}" role="button" tabindex="0" title="Jump to the waiting terminal."` : ''}
+      >
+        <span class="workstream-digest-label">${esc(item.label)}</span>
+        <span class="workstream-digest-main">${esc(item.value)}</span>
+        ${item.detail ? `<span class="workstream-digest-detail">${esc(item.detail)}</span>` : ''}
+      </div>
+    `)
+    .join('')
+}
+
+function terminalLabel(kind: TerminalKind) {
+  if (kind === 'claude') return 'Claude'
+  if (kind === 'codex') return 'Codex'
+  return 'Shell'
+}
+
+function sessionAgentKind(session: SessionRecord): AgentTerminalKind | null {
+  const title = session.title.toLowerCase()
+  const transcriptPath = session.transcriptPath.toLowerCase()
+
+  if (title.startsWith('claude terminal')) return 'claude'
+  if (title.startsWith('codex terminal')) return 'codex'
+  if (transcriptPath.includes('/.claude/') || transcriptPath.includes('\\.claude\\')) return 'claude'
+
+  return null
+}
+
+function sessionContextKind(session: SessionRecord): AgentTerminalKind | 'shell' | 'unknown' {
+  const agent = sessionAgentKind(session)
+  if (agent) return agent
+  if (session.title.toLowerCase().startsWith('shell terminal')) return 'shell'
+  return 'unknown'
+}
+
+function sessionAllowedForBridgeTarget(session: SessionRecord, targetKind: AgentTerminalKind) {
+  const source = sessionContextKind(session)
+  if (targetKind === 'codex') return source === 'claude' && contextSharingSettings.claudeToCodex
+  if (targetKind === 'claude') return source === 'codex' && contextSharingSettings.codexToClaude
+  return false
+}
+
+function sessionsForBridgeTarget(detail: ProjectDetail, targetKind: AgentTerminalKind) {
+  return detail.sessions.filter((session) => sessionAllowedForBridgeTarget(session, targetKind))
+}
+
+function hasAllowedCrossAgentContext(detail: ProjectDetail, targetKind: AgentTerminalKind) {
+  return sessionsForBridgeTarget(detail, targetKind).length > 0
+}
+
+function isNativeClaudeSession(session: SessionRecord) {
+  const transcriptPath = session.transcriptPath.toLowerCase()
+  return !session.id.startsWith('terminal-')
+    && (transcriptPath.includes('/.claude/projects/') || transcriptPath.includes('\\.claude\\projects\\'))
+}
+
+function latestClaudeResumeSessionId(detail: ProjectDetail | null) {
+  if (!detail) return undefined
+  return detail.sessions
+    .filter(isNativeClaudeSession)
+    .slice()
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.id
+}
+
+function primaryWorkstreamAgent(detail: ProjectDetail): AgentTerminalKind | null {
+  const sessions = [...detail.sessions].sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+  for (const session of sessions) {
+    const agent = sessionAgentKind(session)
+    if (agent) return agent
+  }
+  return null
+}
+
+function setButtonLabel(button: HTMLButtonElement, label: string) {
+  const labelElement = button.querySelector<HTMLElement>('.button-label')
+  if (labelElement) {
+    labelElement.textContent = label
+    return
+  }
+  button.textContent = label
+}
+
+function runningWorkstreamAgentTerminal(kind: AgentTerminalKind) {
+  return currentWorkstreamTerminals().find((view) => (
+    view.record.kind === kind && view.record.status === 'running'
+  ))
+}
+
+function renderWorkstreamLaunchLabels(detail: ProjectDetail | null) {
+  if (!detail) {
+    setButtonLabel(newClaudeButton, 'Claude')
+    setButtonLabel(newCodexButton, 'Codex')
+    newClaudeButton.classList.remove('active-toggle')
+    newCodexButton.classList.remove('active-toggle')
+    newClaudeButton.setAttribute('aria-pressed', 'false')
+    newCodexButton.setAttribute('aria-pressed', 'false')
+    newClaudeButton.title = 'Start Claude Code from this directory.'
+    newCodexButton.title = 'Start Codex from this directory.'
+    return
+  }
+
+  const primaryAgent = primaryWorkstreamAgent(detail)
+  const runningClaude = runningWorkstreamAgentTerminal('claude')
+  const runningCodex = runningWorkstreamAgentTerminal('codex')
+  const claudeResumeSessionId = latestClaudeResumeSessionId(detail)
+  const claudeVerb = runningClaude ? 'Show' : claudeResumeSessionId ? 'Resume' : 'Start'
+  const codexVerb = runningCodex ? 'Show' : primaryAgent === 'codex' ? 'Continue' : 'Start'
+
+  setButtonLabel(newClaudeButton, `${claudeVerb} Claude`)
+  setButtonLabel(newCodexButton, `${codexVerb} Codex`)
+  newClaudeButton.classList.toggle('active-toggle', Boolean(runningClaude))
+  newCodexButton.classList.toggle('active-toggle', Boolean(runningCodex))
+  newClaudeButton.setAttribute('aria-pressed', runningClaude ? 'true' : 'false')
+  newCodexButton.setAttribute('aria-pressed', runningCodex ? 'true' : 'false')
+  const claudeCodexBridge = hasAllowedCrossAgentContext(detail, 'claude')
+    ? ' A compact Codex memory bridge will be pasted for review.'
+    : ''
+  newClaudeButton.title = runningClaude
+    ? 'Show the running Claude terminal attached to this workstream.'
+    : claudeResumeSessionId
+    ? 'Resume the latest Claude Code conversation with native claude --resume and attach the terminal here.'
+    : 'Start Claude Code from this workstream repo. Use Paste context for a manual handoff if needed.'
+  if (!runningClaude) newClaudeButton.title += claudeCodexBridge
+  newCodexButton.title = runningCodex
+    ? 'Show the running Codex terminal attached to this workstream.'
+    : primaryAgent === 'codex'
+    ? 'Start Codex and paste workstream resume context for review. Codex does not natively resume the prior transcript here.'
+    : hasAllowedCrossAgentContext(detail, 'codex')
+      ? 'Start Codex from this workstream repo and paste a compact Claude memory bridge for review.'
+      : 'Start Codex from this workstream repo.'
+}
+
+function updateGlobalLaunchControls() {
+  globalUseCurrentButton.disabled = !currentDetail
+}
+
+function pathBasename(value: string) {
+  const normalized = value.replace(/\/+$/, '')
+  const parts = normalized.split('/').filter(Boolean)
+  return parts[parts.length - 1] ?? value
+}
+
+function writeTerminalData(view: TerminalView, data: string, logBytes?: number) {
+  if (logBytes !== undefined) view.record.logBytes = logBytes
+  if (!data) return false
+  const needsInputSuppressionChanged = updateTerminalNeedsInputSuppression(view, data)
+  if (view.logRestored) {
+    queueTerminalWrite(view, data, { scroll: true })
+    if (needsInputSuppressionChanged) renderProjectsList()
+    return needsInputSuppressionChanged
+  }
+  view.pendingData.push({ data, logBytes })
+  if (needsInputSuppressionChanged) renderProjectsList()
+  return needsInputSuppressionChanged
+}
+
+function createTerminalFitAddon(terminal: InstanceType<typeof window.Terminal>) {
+  const FitAddon = window.FitAddon?.FitAddon
+  if (!FitAddon || !terminal.loadAddon) return undefined
+  const addon = new FitAddon()
+  terminal.loadAddon(addon)
+  return addon
+}
+
+function queueTerminalWrite(view: TerminalView, data: string, options: { scroll?: boolean } = {}) {
+  if (!data) return
+  view.pendingWrites.push(data)
+  view.scrollAfterWrite = view.scrollAfterWrite || options.scroll
+  if (view.writeFrame !== null) return
+  view.writeFrame = window.requestAnimationFrame(() => {
+    view.writeFrame = null
+    if (terminalViews.get(view.record.id) !== view) return
+    const chunk = view.pendingWrites.join('')
+    view.pendingWrites = []
+    if (!chunk) return
+    view.terminal.write(chunk)
+    if (view.scrollAfterWrite) {
+      view.scrollAfterWrite = false
+      scrollTerminalToBottom(view)
+    }
+  })
+}
+
+function scrollTerminalViewportToBottom(view: TerminalView) {
+  view.terminal.scrollToBottom?.()
+  const viewport = view.element.querySelector<HTMLElement>('.xterm-viewport')
+  if (viewport) viewport.scrollTop = viewport.scrollHeight
+}
+
+function scrollTerminalToBottom(view: TerminalView, options: { settle?: boolean } = {}) {
+  const delays = options.settle ? TERMINAL_SCROLL_SETTLE_DELAYS_MS : [0]
+  for (const delay of delays) {
+    const scroll = () => window.requestAnimationFrame(() => {
+      if (terminalViews.get(view.record.id) !== view) return
+      scrollTerminalViewportToBottom(view)
+    })
+    if (delay > 0) window.setTimeout(scroll, delay)
+    else scroll()
+  }
+}
+
+function revealTerminalBottom(view: TerminalView) {
+  const scrollTarget = terminalActions.classList.contains('hidden') ? view.element : terminalActions
+  const targetRect = scrollTarget.getBoundingClientRect()
+  const contentRect = contentRoot.getBoundingClientRect()
+  const overflow = targetRect.bottom - contentRect.bottom + TERMINAL_BOTTOM_GUTTER_PX
+  if (overflow > 0) contentRoot.scrollTop += overflow
+}
+
+function settleTerminalAtBottom(view: TerminalView | undefined, options: { reveal?: boolean } = {}) {
+  if (!view) return
+  scrollTerminalToBottom(view, { settle: true })
+  window.requestAnimationFrame(() => {
+    if (terminalViews.get(view.record.id) !== view) return
+    view.terminal.focus()
+    if (options.reveal) revealTerminalBottom(view)
+  })
+  if (options.reveal) {
+    window.setTimeout(() => {
+      if (terminalViews.get(view.record.id) !== view) return
+      revealTerminalBottom(view)
+    }, TERMINAL_SCROLL_SETTLE_DELAYS_MS[TERMINAL_SCROLL_SETTLE_DELAYS_MS.length - 1])
+  }
+}
+
+function measureTerminalCell(view?: TerminalView) {
+  const renderedRow = view?.element.querySelector<HTMLElement>('.xterm-rows > div')
+  const renderedRowRect = renderedRow?.getBoundingClientRect()
+  const probe = document.createElement('span')
+  probe.textContent = '0123456789'
+  probe.style.position = 'absolute'
+  probe.style.visibility = 'hidden'
+  probe.style.whiteSpace = 'pre'
+  probe.style.fontFamily = TERMINAL_FONT_FAMILY
+  probe.style.fontSize = `${TERMINAL_FONT_SIZE}px`
+  probe.style.lineHeight = String(TERMINAL_LINE_HEIGHT)
+  terminalCard.appendChild(probe)
+  const rect = probe.getBoundingClientRect()
+  probe.remove()
+  return {
+    width: rect.width > 0 ? rect.width / 10 : 8,
+    height: renderedRowRect && renderedRowRect.height > 0
+      ? renderedRowRect.height
+      : rect.height > 0 ? rect.height : TERMINAL_FONT_SIZE * TERMINAL_LINE_HEIGHT,
+  }
+}
+
+function preferredTerminalSize(view?: TerminalView) {
+  const pane = view?.element
+    ?? (activeTerminalId ? terminalViews.get(activeTerminalId)?.element : terminalHost.querySelector<HTMLElement>('.terminal-pane'))
+  const paneStyle = pane ? getComputedStyle(pane) : null
+  const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize || '16')
+  const fallbackPanePadding = 0.55 * rootFontSize
+  const paddingX = paneStyle
+    ? parseFloat(paneStyle.paddingLeft || '0') + parseFloat(paneStyle.paddingRight || '0')
+    : fallbackPanePadding * 2
+  const paddingY = paneStyle
+    ? parseFloat(paneStyle.paddingTop || '0') + parseFloat(paneStyle.paddingBottom || '0')
+    : fallbackPanePadding * 2
+
+  const hostRect = terminalHost.getBoundingClientRect()
+  let width = pane && pane.clientWidth > 0 ? pane.clientWidth - paddingX : hostRect.width - paddingX
+  let height = pane && pane.clientHeight > 0 ? pane.clientHeight - paddingY : hostRect.height - paddingY
+
+  if (width < 120) {
+    const cardStyle = getComputedStyle(terminalCard)
+    width = terminalCard.clientWidth
+      - parseFloat(cardStyle.paddingLeft || '0')
+      - parseFloat(cardStyle.paddingRight || '0')
+  }
+  if (width < 120) {
+    const contentStyle = getComputedStyle(contentRoot)
+    width = contentRoot.clientWidth
+      - parseFloat(contentStyle.paddingLeft || '0')
+      - parseFloat(contentStyle.paddingRight || '0')
+  }
+  if (width < 120) width = Math.max(480, window.innerWidth - 460)
+  if (height < 120) height = 520
+
+  const cell = measureTerminalCell(view)
+  const availableWidth = Math.max(0, width - TERMINAL_SCROLLBAR_GUTTER_PX)
+  const availableRows = Math.floor(Math.max(0, height - TERMINAL_BOTTOM_GUTTER_PX) / cell.height)
+
+  return {
+    cols: Math.max(40, Math.floor(availableWidth / cell.width)),
+    rows: Math.max(12, availableRows - TERMINAL_BOTTOM_RESERVE_ROWS),
+  }
+}
+
+function terminalScreenOverflowRows(view: TerminalView) {
+  const xterm = view.element.querySelector<HTMLElement>('.xterm')
+  const screen = view.element.querySelector<HTMLElement>('.xterm-screen')
+  if (!xterm || !screen) return 0
+  const visibleHeight = xterm.clientHeight
+  const screenHeight = screen.getBoundingClientRect().height
+  if (visibleHeight <= 0 || screenHeight <= 0) return 0
+  const overflowPx = screenHeight + TERMINAL_BOTTOM_GUTTER_PX - visibleHeight
+  if (overflowPx <= 1) return 0
+  return Math.ceil(overflowPx / Math.max(1, measureTerminalCell(view).height))
+}
+
+function resizeTerminalToFit(view: TerminalView, cols: number, initialRows: number) {
+  let rows = initialRows
+  for (let pass = 0; pass < TERMINAL_FIT_MAX_TRIM_PASSES; pass += 1) {
+    view.terminal.resize(cols, rows)
+    const overflowRows = terminalScreenOverflowRows(view)
+    if (overflowRows <= 0) return { cols, rows }
+    const nextRows = Math.max(12, rows - overflowRows - 1)
+    if (nextRows === rows) return { cols, rows }
+    rows = nextRows
+  }
+  return { cols, rows }
+}
+
+function fitTerminalWithAddon(view: TerminalView) {
+  if (!view.fitAddon) return undefined
+  try {
+    view.fitAddon.fit()
+    return resizeTerminalToFit(view, view.terminal.cols, view.terminal.rows)
+  } catch {
+    return undefined
+  }
+}
+
+function fitTerminalView(view: TerminalView | undefined) {
+  if (!view) return
+  if (view.element.classList.contains('hidden') || terminalHost.classList.contains('hidden')) return
+  let fitted = fitTerminalWithAddon(view)
+  if (!fitted) {
+    const fallback = preferredTerminalSize(view)
+    fitted = resizeTerminalToFit(view, fallback.cols, fallback.rows)
+  }
+  scrollTerminalToBottom(view, { settle: true })
+  if (view.record.status === 'running') {
+    void window.gogoagent.terminals.resize(view.record.id, fitted.cols, fitted.rows)
+  }
+}
+
+function scheduleTerminalFit(view?: TerminalView) {
+  if (terminalFitFrame !== null) window.cancelAnimationFrame(terminalFitFrame)
+  terminalFitFrame = window.requestAnimationFrame(() => {
+    terminalFitFrame = null
+    const target = view ?? (activeTerminalId ? terminalViews.get(activeTerminalId) : undefined)
+    fitTerminalView(target)
+    if (target) {
+      for (const delay of TERMINAL_REFIT_DELAYS_MS) {
+        window.setTimeout(() => {
+          if (terminalViews.get(target.record.id) !== target || target.record.id !== activeTerminalId) return
+          fitTerminalView(target)
+        }, delay)
+      }
+    }
+  })
+}
+
+async function restoreTerminalLog(view: TerminalView) {
+  let replayBytes = 0
+  try {
+    const replay = await window.gogoagent.terminals.readLog(view.record.id)
+    if (terminalViews.get(view.record.id) !== view) return
+    replayBytes = replay.bytes
+    view.record.logBytes = replay.bytes
+    if (replay.logPath) view.record.logPath = replay.logPath
+    if (replay.truncated) {
+      view.terminal.write('\x1b[90m[older terminal log omitted from replay]\x1b[0m\r\n')
+    }
+    if (replay.data) {
+      view.terminal.write(replay.data)
+      if (updateTerminalNeedsInputSuppression(view, replay.data)) renderProjectsList()
+    } else {
+      view.terminal.write(`\x1b[90mgogoagent terminal · ${view.record.cwd}\x1b[0m\r\n`)
+    }
+  } catch (error) {
+    if (terminalViews.get(view.record.id) !== view) return
+    view.record.logError = (error as Error).message
+    view.terminal.write(`\x1b[90mgogoagent terminal · ${view.record.cwd}\x1b[0m\r\n`)
+    view.terminal.write(`\x1b[90m[terminal log replay failed: ${(error as Error).message}]\x1b[0m\r\n`)
+  } finally {
+    if (terminalViews.get(view.record.id) !== view) return
+    view.logRestored = true
+    const pending = view.pendingData.splice(0)
+    for (const entry of pending) {
+      if (entry.logBytes === undefined || entry.logBytes > replayBytes) {
+        view.terminal.write(entry.data)
+      }
+    }
+    scrollTerminalToBottom(view, { settle: true })
+    renderTerminalTabs()
+  }
+}
+
+function ensureTerminalView(record: TerminalSessionRecord) {
+  const existing = terminalViews.get(record.id)
+  if (existing) {
+    existing.record = record
+    renderTerminalTabs()
+    return existing
+  }
+
+  const terminal = new window.Terminal({
+    cursorBlink: true,
+    convertEol: true,
+    fontFamily: TERMINAL_FONT_FAMILY,
+    fontSize: TERMINAL_FONT_SIZE,
+    lineHeight: TERMINAL_LINE_HEIGHT,
+    scrollback: 5000,
+    theme: {
+      background: '#090d18',
+      foreground: '#dbe7fb',
+      cursor: '#77a1ff',
+      selectionBackground: '#2d406f',
+      scrollbarSliderBackground: 'rgba(152,166,195,0.62)',
+      scrollbarSliderHoverBackground: 'rgba(201,209,222,0.78)',
+      scrollbarSliderActiveBackground: 'rgba(201,209,222,0.92)',
+    },
+  })
+  const element = document.createElement('div')
+  element.className = 'terminal-pane hidden'
+  element.dataset.terminalId = record.id
+  terminalHost.appendChild(element)
+  const fitAddon = createTerminalFitAddon(terminal)
+  terminal.open(element)
+  terminal.onData((data) => {
+    const view = terminalViews.get(record.id)
+    if (view) recordTerminalInput(view, data)
+  })
+  terminal.attachCustomKeyEventHandler?.((event) => {
+    if (event.type !== 'keydown') return true
+    const key = event.key.toLowerCase()
+    const modifier = event.ctrlKey || event.metaKey
+    const view = terminalViews.get(record.id)
+    if (!modifier || !view) return true
+    if (key === 'c' && copyTerminalSelection(view)) return false
+    if (key === 'v' && pasteClipboardIntoTerminal(view)) return false
+    return true
+  })
+
+  const view: TerminalView = {
+    record,
+    terminal,
+    fitAddon,
+    element,
+    logRestored: false,
+    pendingData: [],
+    pendingWrites: [],
+    writeFrame: null,
+  }
+  terminalViews.set(record.id, view)
+  void restoreTerminalLog(view)
+  renderTerminalTabs()
+  return view
+}
+
+function selectTerminal(id: string | null) {
+  activeTerminalId = id
+  for (const view of terminalViews.values()) {
+    view.element.classList.toggle('hidden', view.record.id !== id)
+  }
+  renderTerminalTabs()
+  renderTerminalStatus()
+  if (id) {
+    const view = terminalViews.get(id)
+    scheduleTerminalFit(view)
+    settleTerminalAtBottom(view, { reveal: true })
+  }
+}
+
+function renderTerminalTabs() {
+  const terminals = currentWorkstreamTerminals()
+  terminalEmpty.classList.toggle('hidden', terminals.length > 0)
+  terminalActions.classList.toggle('hidden', terminals.length === 0)
+  terminalHost.classList.toggle('hidden', terminals.length === 0)
+
+  if (!terminals.length) {
+    terminalTabs.innerHTML = ''
+    activeTerminalId = null
+    renderTerminalStatus()
+    if (currentDetail) renderWorkstreamDigest(currentDetail)
+    renderWorkstreamLaunchLabels(currentDetail)
+    return
+  }
+
+  if (!activeTerminalId || !terminals.some((view) => view.record.id === activeTerminalId)) {
+    activeTerminalId = terminals.find(terminalNeedsInput)?.record.id ?? terminals[terminals.length - 1].record.id
+  }
+
+  terminalTabs.innerHTML = terminals
+    .map((view) => {
+      const selected = view.record.id === activeTerminalId ? ' selected' : ''
+      const status = view.record.status === 'running'
+        ? terminalNeedsInput(view) ? 'needs input' : 'running'
+        : `exited${view.record.exitCode !== undefined ? ` ${view.record.exitCode}` : ''}`
+      return `
+        <button class="terminal-tab${selected}" type="button" data-terminal-id="${esc(view.record.id)}" title="Show ${esc(view.record.title)}. Status: ${esc(status)}.">
+          <span class="terminal-tab-title">${iconMarkup(terminalKindIcon(view.record.kind), 'inline-icon')}${esc(view.record.title)}</span>
+          <small>${esc(terminalLabel(view.record.kind))} · ${esc(status)}</small>
+        </button>
+      `
+    })
+    .join('')
+
+  terminalTabs.querySelectorAll<HTMLButtonElement>('.terminal-tab').forEach((button) => {
+    button.addEventListener('click', () => {
+      selectTerminal(button.dataset.terminalId ?? null)
+    })
+  })
+
+  for (const view of terminalViews.values()) {
+    view.element.classList.toggle('hidden', view.record.id !== activeTerminalId)
+  }
+  if (activeTerminalId) {
+    const view = terminalViews.get(activeTerminalId)
+    scheduleTerminalFit(view)
+    settleTerminalAtBottom(view)
+  }
+  renderTerminalStatus()
+  if (currentDetail) renderWorkstreamDigest(currentDetail)
+  renderWorkstreamLaunchLabels(currentDetail)
+}
+
+function renderTerminalStatus() {
+  const view = activeTerminalId ? terminalViews.get(activeTerminalId) : undefined
+  if (!view) {
+    terminalStatus.textContent = 'No terminal selected.'
+    terminalCopyContextButton.disabled = !currentDetail
+    terminalPasteContextButton.disabled = true
+    terminalCopyLogButton.disabled = true
+    terminalCloseButton.disabled = true
+    terminalCloseButton.classList.remove('danger-button')
+    terminalCloseButton.innerHTML = buttonContent('x', 'Close')
+    return
+  }
+
+  const pasteHint = view.record.kind === 'shell'
+    ? ' · paste context is only enabled for Claude/Codex tabs'
+    : ''
+  const logHint = view.record.logError
+    ? ` · log error: ${view.record.logError}`
+    : view.record.logPath
+      ? ` · log ${fmtBytes(view.record.logBytes)}`
+      : ''
+  terminalStatus.textContent = `${view.record.status} · ${view.record.cwd}${logHint}${pasteHint}`
+  terminalCopyContextButton.disabled = !currentDetail
+  terminalPasteContextButton.disabled = !currentDetail || view.record.status !== 'running' || view.record.kind === 'shell'
+  terminalCopyLogButton.disabled = !view.record.logPath || view.record.logBytes === 0
+  const isRunning = view.record.status === 'running'
+  terminalCloseButton.disabled = false
+  terminalCloseButton.classList.toggle('danger-button', isRunning)
+  terminalCloseButton.innerHTML = buttonContent(isRunning ? 'square' : 'x', isRunning ? 'End' : 'Close')
+  terminalCloseButton.title = isRunning
+    ? view.record.kind === 'shell'
+      ? 'Terminate this shell process and close the terminal tab.'
+      : `Terminate the running ${terminalLabel(view.record.kind)} process and close the terminal tab.`
+    : view.record.userInteracted
+      ? 'Close this terminal tab after saving its log metadata.'
+      : 'Close this draft terminal tab. It will not be indexed unless it had user input.'
+}
+
+async function openTerminalWorkstream(record: TerminalSessionRecord) {
+  const view = ensureTerminalView(record)
+  if (!record.workstreamId) {
+    showDraftWorkstream(view)
+    selectTerminal(record.id)
+    return
+  }
+
+  await loadAllProjects()
+  if (projects.some((project) => project.id === record.workstreamId)) {
+    await selectProject(record.workstreamId)
+  } else {
+    showDraftWorkstream(view)
+  }
+  selectTerminal(record.id)
+}
+
+async function activateOrCreateAgentTerminal(kind: AgentTerminalKind) {
+  const running = currentDetail ? runningWorkstreamAgentTerminal(kind) : undefined
+  if (running) {
+    selectTerminal(running.record.id)
+    settleTerminalAtBottom(running, { reveal: true })
+    return
+  }
+  await createTerminal(kind)
+}
+
+async function createTerminal(kind: TerminalKind) {
+  const label = terminalLabel(kind)
+  if (!currentDetail) {
+    const activeView = activeTerminalId ? terminalViews.get(activeTerminalId) : undefined
+    const cwd = activeView?.record.cwd ?? terminalOnlyCwd ?? globalCwdInput.value.trim()
+    try {
+      terminalStatus.textContent = `Starting ${label}...`
+      const size = preferredTerminalSize()
+      const record = await window.gogoagent.terminals.create({
+        kind,
+        cwd: cwd || undefined,
+        title: `${label} · ${cwd ? pathBasename(cwd) : 'Home'}`,
+        cols: size.cols,
+        rows: size.rows,
+      })
+      await openTerminalWorkstream(record)
+      globalLaunchStatus.textContent = `Started ${label} in ${record.cwd}.`
+    } catch (error) {
+      terminalStatus.textContent = `Launch failed: ${(error as Error).message}`
+      globalLaunchStatus.textContent = `Launch failed: ${(error as Error).message}`
+    }
+    return
+  }
+
+  try {
+    const detailAtLaunch = currentDetail
+    const resumeSessionId = kind === 'claude' ? latestClaudeResumeSessionId(detailAtLaunch) : undefined
+    terminalStatus.textContent = `${resumeSessionId ? 'Resuming' : 'Starting'} ${label}...`
+    const size = preferredTerminalSize()
+    const record = await window.gogoagent.terminals.create({
+      kind,
+      cwd: detailAtLaunch.project.repoRoot,
+      workstreamId: detailAtLaunch.project.id,
+      gitBranch: detailAtLaunch.project.branch,
+      resumeSessionId,
+      title: `${label} · ${detailAtLaunch.project.name}`,
+      cols: size.cols,
+      rows: size.rows,
+    })
+    ensureTerminalView(record)
+    selectTerminal(record.id)
+    const primaryAgent = primaryWorkstreamAgent(detailAtLaunch)
+    const launchContextKind: 'resume' | 'bridge' | null =
+      kind === 'codex' && primaryAgent === 'codex'
+        ? 'resume'
+        : (kind === 'claude' || kind === 'codex') && hasAllowedCrossAgentContext(detailAtLaunch, kind)
+          ? 'bridge'
+          : null
+    if (launchContextKind) {
+      terminalStatus.textContent = launchContextKind === 'resume'
+        ? 'Preparing Codex resume context...'
+        : `Preparing ${label} memory bridge...`
+      window.setTimeout(() => {
+        void pasteResumeContextIntoTerminal(record.id, detailAtLaunch, {
+          contextKind: launchContextKind,
+          flash: false,
+          targetKind: kind === 'claude' || kind === 'codex' ? kind : undefined,
+        })
+          .then((pasted) => {
+            if (pasted) {
+              terminalStatus.textContent = launchContextKind === 'resume'
+                ? 'Codex resume context pasted. Review and send when ready.'
+                : `${label} memory bridge pasted. Review and send when ready.`
+            }
+          })
+          .catch((error) => {
+            terminalStatus.textContent = `${label} context paste failed: ${(error as Error).message}`
+          })
+      }, 800)
+    }
+  } catch (error) {
+    terminalStatus.textContent = `Launch failed: ${(error as Error).message}`
+  }
+}
+
+function showDraftWorkstream(view?: TerminalView) {
+  projectSelectionVersion++
+  const cwd = view?.record.cwd ?? globalCwdInput.value.trim()
+  if (view) terminalOnlyCwd = view.record.cwd
+  else terminalOnlyCwd = null
+  selectedProjectId = null
+  currentDetail = null
+  activeTerminalId = view?.record.id ?? null
+  setRenameEditing(false)
+  renameStatus.textContent = ''
+  renderProjectsList()
+  detailEmpty.classList.add('hidden')
+  detailRoot.classList.remove('hidden')
+  detailRoot.classList.add('terminal-only')
+  detailRoot.classList.remove('terminal-focus')
+  detailSubtitle.textContent = 'Draft workstream'
+  detailTitle.textContent = view?.record.title ?? (cwd ? pathBasename(cwd) || cwd : 'New workstream')
+  detailMeta.textContent = view
+    ? `${compactPath(view.record.cwd)} · not saved yet`
+    : `${cwd ? compactPath(cwd) : 'Default directory'} · not saved yet`
+  detailMeta.title = view?.record.cwd ?? cwd
+  terminalHelp.textContent = 'Choose Claude, Codex, or Shell to begin.'
+  renderWorkstreamLaunchLabels(null)
+  renderTerminalFocusButton(null)
+  refineStatus.textContent = ''
+  renderTerminalTabs()
+  if (view) scheduleTerminalFit(view)
+  updateTimelineControls()
+  updateGlobalLaunchControls()
+}
+
+function openNewWorkstreamDraft() {
+  const cwd = globalCwdInput.value.trim()
+  if (cwd) localStorage.setItem(GLOBAL_CWD_STORAGE_KEY, cwd)
+  else localStorage.removeItem(GLOBAL_CWD_STORAGE_KEY)
+  cwdCompletionState = null
+  showDraftWorkstream()
+  globalLaunchStatus.textContent = cwd
+    ? `Draft workstream in ${cwd}.`
+    : 'Draft workstream using the default directory.'
+}
+
+function useCurrentProjectForGlobalLaunch() {
+  if (!currentDetail) return
+  globalCwdInput.value = currentDetail.project.repoRoot
+  localStorage.setItem(GLOBAL_CWD_STORAGE_KEY, currentDetail.project.repoRoot)
+  cwdCompletionState = null
+  globalLaunchStatus.textContent = 'Using selected workstream repo.'
+}
+
+function activeCwdCompletionState() {
+  if (!cwdCompletionState) return null
+  const completion = cwdCompletionState.completions[cwdCompletionState.index]
+  const cursor = globalCwdInput.selectionStart ?? globalCwdInput.value.length
+  const selectionEnd = globalCwdInput.selectionEnd ?? cursor
+  if (!completion || cursor !== selectionEnd) return null
+  if (cursor !== completion.length) return null
+  if (globalCwdInput.value !== `${completion}${cwdCompletionState.suffix}`) return null
+  return cwdCompletionState
+}
+
+async function cycleGlobalCwdCompletion(reverse = false) {
+  if (cwdCompletionInFlight) return
+
+  let state = activeCwdCompletionState()
+  if (!state) {
+    const value = globalCwdInput.value
+    const cursor = globalCwdInput.selectionStart ?? value.length
+    const selectionEnd = globalCwdInput.selectionEnd ?? cursor
+    const source = value.slice(0, cursor)
+    const suffix = value.slice(selectionEnd)
+
+    cwdCompletionState = null
+    cwdCompletionInFlight = true
+    try {
+      const response = await window.gogoagent.files.completeDirectory(source)
+      const completions = [...new Set(response.completions)].filter(Boolean)
+      if (!completions.length) {
+        globalLaunchStatus.textContent = response.error ? `No matching directories.` : 'No matching directories.'
+        return
+      }
+      state = {
+        source,
+        suffix,
+        completions,
+        index: reverse ? completions.length : -1,
+      }
+    } catch (error) {
+      globalLaunchStatus.textContent = `Completion failed: ${(error as Error).message}`
+      return
+    } finally {
+      cwdCompletionInFlight = false
+    }
+  }
+
+  state.index = (state.index + (reverse ? -1 : 1) + state.completions.length) % state.completions.length
+  const completion = state.completions[state.index]
+  globalCwdInput.value = `${completion}${state.suffix}`
+  globalCwdInput.setSelectionRange(completion.length, completion.length)
+
+  if (state.completions.length > 1) {
+    cwdCompletionState = state
+    globalLaunchStatus.textContent = `${state.index + 1}/${state.completions.length} directory matches.`
+  } else {
+    cwdCompletionState = null
+    globalLaunchStatus.textContent = 'Completed directory.'
+  }
+}
+
+async function closeActiveTerminal() {
+  if (!activeTerminalId) return
+  const view = terminalViews.get(activeTerminalId)
+  terminalStatus.textContent = view?.record.status === 'running'
+    ? `Ending ${terminalLabel(view.record.kind)}...`
+    : 'Closing terminal...'
+  await window.gogoagent.terminals.close(activeTerminalId)
+}
+
+async function copyActiveTerminalLog() {
+  if (!activeTerminalId) return
+  try {
+    const replay = await window.gogoagent.terminals.readLog(activeTerminalId)
+    const body = stripAnsi(replay.data)
+    const text = [
+      replay.truncated ? `[Earlier terminal output omitted; copied tail of ${fmtBytes(replay.bytes)} terminal log.]` : undefined,
+      body || '[Terminal log is empty.]',
+    ].filter((line): line is string => line !== undefined).join('\n')
+    await copyText(text)
+    flashButton(terminalCopyLogButton, 'Copied')
+  } catch (error) {
+    terminalStatus.textContent = `Log copy failed: ${(error as Error).message}`
+    flashButton(terminalCopyLogButton, 'Failed')
+  }
+}
+
+function terminalPastePayload(text: string) {
+  return `\x1b[200~${text}\x1b[201~`
+}
+
+async function pasteResumeContextIntoTerminal(
+  terminalId: string,
+  detail: ProjectDetail,
+  options: { contextKind?: 'resume' | 'bridge'; flash?: boolean; targetKind?: AgentTerminalKind } = {},
+) {
+  const view = terminalViews.get(terminalId)
+  if (!view || view.record.status !== 'running' || view.record.kind === 'shell') return
+  const terminalKind = view.record.kind === 'claude' || view.record.kind === 'codex' ? view.record.kind : undefined
+  const targetKind = options.targetKind ?? terminalKind
+  if (!targetKind) return
+  const text = options.contextKind === 'bridge'
+    ? await buildBridgeContext(detail, targetKind)
+    : await buildResumeContext(detail)
+  await window.gogoagent.terminals.write(terminalId, terminalPastePayload(text))
+  view.terminal.focus()
+  if (options.flash ?? true) flashButton(terminalPasteContextButton, 'Pasted')
+  return true
+}
+
+async function pasteResumeContextIntoActiveTerminal() {
+  if (!currentDetail || !activeTerminalId) return
+  const view = terminalViews.get(activeTerminalId)
+  await pasteResumeContextIntoTerminal(activeTerminalId, currentDetail, {
+    targetKind: view?.record.kind === 'claude' || view?.record.kind === 'codex' ? view.record.kind : undefined,
+  })
+}
+
+async function loadExistingTerminals() {
+  const records = await window.gogoagent.terminals.list()
+  for (const record of records) ensureTerminalView(record)
+  renderTerminalTabs()
+}
+
+function setupTerminalEvents() {
+  window.gogoagent.terminals.onCreated((record) => {
+    ensureTerminalView(record)
+    if (record.workstreamId === selectedProjectId) selectTerminal(record.id)
+    void refreshProjectsIfChanged()
+  })
+  window.gogoagent.terminals.onData(({ id, data, logBytes, lastActivityAt, needsInput, needsInputChanged }) => {
+    const view = terminalViews.get(id)
+    if (!view) return
+    if (lastActivityAt) view.record.lastActivityAt = lastActivityAt
+    const activityChanged = bumpProjectActivity(view.record.workstreamId, lastActivityAt)
+    if (data) markWorkstreamUnread(view.record.workstreamId)
+    if (needsInput !== undefined) view.record.needsInput = needsInput
+    const needsInputSuppressionChanged = writeTerminalData(view, data, logBytes)
+    renderTerminalStatus()
+    if (needsInputChanged || needsInputSuppressionChanged) {
+      if (terminalNeedsInput(view) && view.record.id === activeTerminalId) {
+        settleTerminalAtBottom(view, { reveal: true })
+      }
+      projects = sortProjectsByActivity(projects)
+      renderTerminalTabs()
+      renderProjectsList()
+      void refreshProjectsIfChanged()
+    } else if (activityChanged) {
+      renderTerminalTabs()
+    }
+  })
+  window.gogoagent.terminals.onExit(({ id, record }) => {
+    const view = terminalViews.get(id)
+    if (!view) return
+    view.record = record
+    writeTerminalData(view, `\r\n\x1b[90m[process exited with code ${record.exitCode ?? 'unknown'}]\x1b[0m\r\n`, record.logBytes)
+    renderTerminalTabs()
+    if (record.workstreamId === selectedProjectId) {
+      window.setTimeout(() => void loadAllProjects(), 1500)
+    } else {
+      window.setTimeout(() => void refreshProjectsIfChanged(), 1500)
+    }
+  })
+  window.gogoagent.terminals.onClosed(({ id }) => {
+    const view = terminalViews.get(id)
+    if (!view) return
+    if (view.writeFrame !== null) window.cancelAnimationFrame(view.writeFrame)
+    view.element.remove()
+    terminalViews.delete(id)
+    if (activeTerminalId === id) activeTerminalId = null
+    renderTerminalTabs()
+    void loadAllProjects()
+  })
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+let lastActivityRenderedAt: string | null = null
+let lastProjectListFingerprint: string | null = null
+
+async function checkHealth() {
+  try {
+    const health = await window.gogoagent.getHealth()
+    setAppNotice('')
+    if (health.lastActivity) {
+      footerActivity.textContent = `${health.lastActivity.label} · ${fmtRelative(health.lastActivity.at)}`
+      if (lastActivityRenderedAt !== health.lastActivity.at) {
+        lastActivityRenderedAt = health.lastActivity.at
+        if (/title|Renamed|Scanned|terminal/i.test(health.lastActivity.label)) {
+          void refreshProjectsIfChanged()
+        }
+      }
+    } else {
+      footerActivity.textContent = ''
+    }
+    return true
+  } catch (error) {
+    setAppNotice(`Sidecar unreachable: ${(error as Error).message}`)
+    footerActivity.textContent = ''
+    return false
+  }
+}
+
+async function refreshProjectsIfChanged() {
+  try {
+    const listedProjects = await window.gogoagent.projects.list({ archived: showArchivedWorkstreams })
+    const fingerprint = listedProjects
+      .map((p) => `${p.id}:${p.name}:${p.sessionCount}:${p.lastUpdatedAt}:${p.draft ? 'draft' : ''}:${p.activeTerminalIds?.join(',') ?? ''}:${p.needsInputTerminalIds?.join(',') ?? ''}:${p.archivedAt ?? ''}`)
+      .join('|')
+    if (fingerprint === lastProjectListFingerprint) return
+    lastProjectListFingerprint = fingerprint
+    projects = sortProjectsByActivity(listedProjects)
+    renderProjectsList()
+    if (selectedProjectId && projects.some((p) => p.id === selectedProjectId)) {
+      const project = projects.find((p) => p.id === selectedProjectId)
+      if (project) {
+        if (currentDetail) {
+          currentDetail = { ...currentDetail, project }
+          setCachedValue(projectDetailCache, selectedProjectId, currentDetail)
+        }
+        detailTitle.textContent = project.name
+      }
+    } else if (selectedProjectId) {
+      showEmptyDetail(showArchivedWorkstreams ? 'Select an archived workstream.' : 'Select a workstream.')
+    }
+  } catch {
+    // Silent — footer already shows sidecar state.
+  }
+}
+
+async function waitForSidecar(attempts = 40, delayMs = 250) {
+  let lastError = 'not ready'
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await window.gogoagent.getHealth()
+      setAppNotice('')
+      return true
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error)
+      await delay(delayMs)
+    }
+  }
+  setAppNotice(`Sidecar unreachable: ${lastError}`)
+  return false
+}
+
+// ---------- Projects list ----------
+function projectBelongsInCurrentList(project: Project) {
+  return showArchivedWorkstreams ? Boolean(project.archivedAt) : !project.archivedAt
+}
+
+function pinnedWorkstreamRank(projectId: string) {
+  let rank = 0
+  for (const pinnedId of pinnedWorkstreamIds) {
+    if (pinnedId === projectId) return rank
+    rank += 1
+  }
+  return Number.POSITIVE_INFINITY
+}
+
+function projectAttentionRank(project: Project) {
+  if (projectNeedsInputTerminalIds(project).length > 0) return 0
+  if ((project.activeTerminalIds?.length ?? 0) > 0) return 1
+  return 2
+}
+
+function sortProjectsByActivity(items: Project[]) {
+  return items.slice().sort((a, b) => {
+    const aPinned = pinnedWorkstreamIds.has(a.id)
+    const bPinned = pinnedWorkstreamIds.has(b.id)
+    if (aPinned || bPinned) {
+      if (aPinned !== bPinned) return aPinned ? -1 : 1
+      return pinnedWorkstreamRank(a.id) - pinnedWorkstreamRank(b.id)
+    }
+    const attentionDelta = projectAttentionRank(a) - projectAttentionRank(b)
+    if (attentionDelta !== 0) return attentionDelta
+    return b.lastUpdatedAt.localeCompare(a.lastUpdatedAt)
+  })
+}
+
+function archivedViewEmptyMessage() {
+  return showArchivedWorkstreams ? 'No archived workstreams.' : 'No projects yet. Work with Claude Code, then Reload.'
+}
+
+function togglePinnedWorkstream(projectId: string) {
+  if (pinnedWorkstreamIds.has(projectId)) {
+    pinnedWorkstreamIds.delete(projectId)
+  } else {
+    pinnedWorkstreamIds.add(projectId)
+  }
+  saveStringSet(PINNED_WORKSTREAMS_STORAGE_KEY, pinnedWorkstreamIds)
+  projects = sortProjectsByActivity(projects)
+  renderProjectsList()
+}
+
+function markWorkstreamUnread(workstreamId: string | undefined) {
+  if (!workstreamId || workstreamId === selectedProjectId) return
+  if (unreadWorkstreamIds.has(workstreamId)) return
+  unreadWorkstreamIds.add(workstreamId)
+  renderProjectsList()
+}
+
+function clearWorkstreamUnread(workstreamId: string) {
+  if (!unreadWorkstreamIds.delete(workstreamId)) return
+  renderProjectsList()
+}
+
+function renderArchivedToggle() {
+  showArchivedButton.innerHTML = buttonContent(showArchivedWorkstreams ? 'archive-restore' : 'archive', showArchivedWorkstreams ? 'Active' : 'Archived')
+  showArchivedButton.title = showArchivedWorkstreams ? 'Show active workstreams.' : 'Show archived workstreams.'
+  showArchivedButton.setAttribute('aria-pressed', showArchivedWorkstreams ? 'true' : 'false')
+}
+
+function filterProjects(): Project[] {
+  const q = projectsSearch.value.trim().toLowerCase()
+  if (!q) return projects
+  return projects.filter((p) => {
+    const haystack = `${p.name} ${p.repoRoot} ${p.branch ?? ''} ${workstreamStatusNote(p.id)}`.toLowerCase()
+    return haystack.includes(q)
+  })
+}
+
+function renderProjectsList() {
+  renderArchivedToggle()
+  const filtered = filterProjects()
+  const modeLabel = showArchivedWorkstreams ? 'archived' : 'active'
+  footerStats.textContent = `${projects.length} ${modeLabel} workstreams · ${projects.reduce((acc, p) => acc + p.sessionCount, 0)} sessions`
+
+  if (!filtered.length) {
+    renderEmpty(projectsList, projects.length === 0 ? archivedViewEmptyMessage() : 'No matches.')
+    return
+  }
+
+  projectsList.innerHTML = filtered
+    .map((project) => {
+      const selected = project.id === selectedProjectId ? ' selected' : ''
+      const pinned = pinnedWorkstreamIds.has(project.id)
+      const unread = unreadWorkstreamIds.has(project.id)
+      const statusNote = workstreamStatusNote(project.id)
+      const branch = project.branch ? `<span class="badge subtle">${esc(project.branch)}</span>` : ''
+      const liveCount = project.activeTerminalIds?.length ?? 0
+      const needsInputIds = projectNeedsInputTerminalIds(project)
+      const needsInputCount = needsInputIds.length
+      const liveTitle = `${liveCount} live terminal${liveCount === 1 ? '' : 's'} attached.${needsInputCount > 0 ? ` ${needsInputCount} waiting for user input.` : ''}`
+      const liveIndicator = liveCount > 0
+        ? `
+          <span class="project-live-indicator" title="${esc(liveTitle)}" aria-label="${esc(liveTitle)}">
+            <span class="project-live-dot" aria-hidden="true"></span>
+            ${needsInputCount > 0 ? `<button class="project-input-indicator" type="button" data-input-project-id="${esc(project.id)}" data-input-terminal-id="${esc(needsInputIds[0] ?? '')}" title="Jump to waiting terminal." aria-label="Jump to waiting terminal">&gt;</button>` : ''}
+          </span>
+        `
+        : ''
+      const pinTitle = pinned ? 'Unpin workstream.' : 'Pin workstream.'
+      const lastActive = fmtRelative(project.lastUpdatedAt)
+      const pathLabel = compactPath(project.repoRoot)
+      return `
+        <div class="project-card${selected}${project.archivedAt ? ' archived' : ''}${pinned ? ' pinned' : ''}${unread ? ' unread' : ''}" data-project-id="${esc(project.id)}" role="button" tabindex="0" title="Open ${esc(project.name)}. Last active ${esc(lastActive)}. ${esc(project.repoRoot)}.">
+          <span class="project-card-title-row">
+            <span class="session-card-title">${esc(project.name)}</span>
+            <span class="project-card-controls">
+              <button class="project-pin-button icon-button secondary-button${pinned ? ' pinned' : ''}" type="button" data-pin-project-id="${esc(project.id)}" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinned ? 'true' : 'false'}">
+                ${iconMarkup('pin')}
+              </button>
+              ${liveIndicator}
+            </span>
+          </span>
+          <span class="project-card-meta-row">
+            <span class="session-card-path" title="${esc(project.repoRoot)}">${esc(pathLabel)}</span>
+            <span class="session-card-meta" title="${esc(project.lastUpdatedAt)}">${esc(lastActive)}</span>
+          </span>
+          ${statusNote ? `<span class="project-status-note" title="${esc(statusNote)}">${esc(statusNote)}</span>` : ''}
+          ${branch ? `<span class="chip-row">${branch}</span>` : ''}
+        </div>
+      `
+    })
+    .join('')
+
+  projectsList.querySelectorAll<HTMLButtonElement>('.project-pin-button').forEach((button) => {
+    button.addEventListener('keydown', (event) => {
+      event.stopPropagation()
+    })
+    button.addEventListener('click', (event) => {
+      event.stopPropagation()
+      const id = button.dataset.pinProjectId
+      if (!id) return
+      togglePinnedWorkstream(id)
+    })
+  })
+
+  projectsList.querySelectorAll<HTMLButtonElement>('.project-input-indicator').forEach((button) => {
+    button.addEventListener('keydown', (event) => {
+      event.stopPropagation()
+      if (event.key !== 'Enter' && event.key !== ' ') return
+      event.preventDefault()
+      const projectId = button.dataset.inputProjectId
+      if (!projectId) return
+      void jumpToNeedsInputTerminal(projectId, button.dataset.inputTerminalId || undefined)
+    })
+    button.addEventListener('click', (event) => {
+      event.stopPropagation()
+      const projectId = button.dataset.inputProjectId
+      if (!projectId) return
+      void jumpToNeedsInputTerminal(projectId, button.dataset.inputTerminalId || undefined)
+    })
+  })
+
+  projectsList.querySelectorAll<HTMLElement>('.project-card').forEach((card) => {
+    const open = () => {
+      const id = card.dataset.projectId
+      if (!id) return
+      selectProject(id)
+    }
+    card.addEventListener('click', open)
+    card.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return
+      event.preventDefault()
+      open()
+    })
+  })
+}
+
+function syncProjectFromDetail(project: Project) {
+  const existing = projects.find((entry) => entry.id === project.id)
+  if (!projectBelongsInCurrentList(project)) {
+    if (existing) {
+      projects = projects.filter((entry) => entry.id !== project.id)
+      renderProjectsList()
+    }
+    return
+  }
+  if (!existing) {
+    projects = sortProjectsByActivity([...projects, project])
+    renderProjectsList()
+    return
+  }
+  if (
+    existing.name === project.name &&
+    existing.repoRoot === project.repoRoot &&
+    existing.branch === project.branch &&
+    existing.sessionCount === project.sessionCount &&
+    existing.keptLessonCount === project.keptLessonCount &&
+    existing.touchedPathCount === project.touchedPathCount &&
+    existing.firstStartedAt === project.firstStartedAt &&
+    existing.lastUpdatedAt === project.lastUpdatedAt &&
+    existing.draft === project.draft &&
+    sameStringArray(existing.activeTerminalIds, project.activeTerminalIds) &&
+    sameStringArray(existing.needsInputTerminalIds, project.needsInputTerminalIds) &&
+    existing.archivedAt === project.archivedAt
+  ) {
+    return
+  }
+  projects = sortProjectsByActivity(projects.map((entry) => (entry.id === project.id ? project : entry)))
+  renderProjectsList()
+}
+
+function showEmptyDetail(message = 'Select a workstream.') {
+  selectedProjectId = null
+  currentDetail = null
+  setRenameEditing(false)
+  renameStatus.textContent = ''
+  detailRoot.classList.add('hidden')
+  detailRoot.classList.remove('terminal-only')
+  detailRoot.classList.remove('terminal-focus')
+  detailEmpty.classList.remove('hidden')
+  detailEmptyText.textContent = message
+  detailMeta.title = ''
+  workstreamDigest.innerHTML = ''
+  renderTerminalFocusButton(null)
+  renderProjectsList()
+  updateTimelineControls()
+  updateGlobalLaunchControls()
+}
+
+// ---------- Project detail ----------
+async function selectProject(projectId: string) {
+  const selectionVersion = ++projectSelectionVersion
+  const cachedDetail = getCachedValue(projectDetailCache, projectId, PROJECT_DETAIL_CACHE_MS)
+  selectedProjectId = projectId
+  clearWorkstreamUnread(projectId)
+  setRenameEditing(false)
+  renameStatus.textContent = ''
+  renderProjectsList() // re-render to update .selected
+  detailEmpty.classList.add('hidden')
+  detailEmptyText.textContent = 'Select a workstream.'
+  detailRoot.classList.remove('hidden')
+  detailRoot.classList.remove('terminal-only')
+  detailRoot.classList.remove('terminal-focus')
+
+  if (cachedDetail) {
+    currentDetail = cachedDetail
+    renderDetail(cachedDetail)
+  } else {
+    currentDetail = null
+    detailTitle.textContent = 'Loading…'
+    detailMeta.textContent = ''
+    detailMeta.title = ''
+    detailSubtitle.textContent = 'Workstream'
+    renderWorkstreamLaunchLabels(null)
+    renderTerminalFocusButton(null)
+    renderEmpty(workstreamDigest, 'Loading…')
+    renderEmpty(detailTimeline, 'Loading timeline…')
+    renderEmpty(detailRefined, 'Loading…')
+    renderEmpty(detailPaths, 'Loading…')
+    renderEmpty(detailSessions, 'Loading…')
+  }
+
+  refineStatus.textContent = ''
+  updateTimelineControls()
+  updateGlobalLaunchControls()
+
+  try {
+    const freshDetail = await getProjectDetail(projectId)
+    if (selectionVersion !== projectSelectionVersion || selectedProjectId !== projectId) return
+    currentDetail = freshDetail
+    syncProjectFromDetail(currentDetail.project)
+    renderDetail(currentDetail)
+    updateGlobalLaunchControls()
+  } catch (error) {
+    if (selectionVersion !== projectSelectionVersion || selectedProjectId !== projectId) return
+    detailTitle.textContent = 'Error'
+    detailMeta.textContent = (error as Error).message
+    detailMeta.title = ''
+  }
+}
+
+function renderDetailMeta(project: Project) {
+  detailMeta.textContent = [
+    compactPath(project.repoRoot),
+    project.branch,
+    `active ${fmtRelative(project.lastUpdatedAt)}`,
+    project.archivedAt ? `archived ${fmtRelative(project.archivedAt)}` : undefined,
+  ].filter((part): part is string => Boolean(part)).join(' · ')
+  detailMeta.title = project.repoRoot
+  statusNoteInput.value = workstreamStatusNote(project.id)
+  statusNoteInput.title = statusNoteInput.value || 'Add a short status note for this workstream.'
+}
+
+function saveCurrentStatusNote() {
+  const projectId = currentDetail?.project.id
+  if (!projectId) return
+  setWorkstreamStatusNote(projectId, statusNoteInput.value)
+  statusNoteInput.value = workstreamStatusNote(projectId)
+  statusNoteInput.title = statusNoteInput.value || 'Add a short status note for this workstream.'
+  if (currentDetail) renderWorkstreamDigest(currentDetail)
+}
+
+function renderTerminalFocusButton(project: Project | null) {
+  const focused = project ? terminalFocusWorkstreamIds.has(project.id) : false
+  terminalFocusButton.disabled = !project
+  terminalFocusButton.classList.toggle('active-toggle', focused)
+  terminalFocusButton.setAttribute('aria-pressed', focused ? 'true' : 'false')
+  terminalFocusButton.title = focused ? 'Show timeline and details.' : 'Focus terminal.'
+  terminalFocusButton.setAttribute('aria-label', focused ? 'Show timeline and details' : 'Focus terminal')
+}
+
+function applyTerminalFocus(project: Project | null) {
+  const focused = project ? terminalFocusWorkstreamIds.has(project.id) : false
+  detailRoot.classList.toggle('terminal-focus', focused)
+  renderTerminalFocusButton(project)
+  if (focused) {
+    const view = activeTerminalId ? terminalViews.get(activeTerminalId) : undefined
+    scheduleTerminalFit(view)
+  }
+}
+
+function toggleTerminalFocus() {
+  const project = currentDetail?.project
+  if (!project) return
+  if (terminalFocusWorkstreamIds.has(project.id)) {
+    terminalFocusWorkstreamIds.delete(project.id)
+  } else {
+    terminalFocusWorkstreamIds.add(project.id)
+  }
+  saveStringSet(TERMINAL_FOCUS_WORKSTREAMS_STORAGE_KEY, terminalFocusWorkstreamIds)
+  applyTerminalFocus(project)
+}
+
+function renderDetail(detail: ProjectDetail) {
+  const { project } = detail
+  setRenameEditing(false)
+  renameStatus.textContent = ''
+  detailRoot.classList.remove('terminal-only')
+  terminalHelp.textContent = ''
+  renderWorkstreamLaunchLabels(detail)
+  detailTitle.textContent = project.name
+  detailSubtitle.textContent = project.archivedAt ? 'Archived workstream' : project.draft ? 'Draft workstream' : 'Workstream'
+  renderDetailMeta(project)
+  applyTerminalFocus(project)
+  archiveWorkstreamButton.innerHTML = iconMarkup(project.archivedAt ? 'archive-restore' : 'archive')
+  archiveWorkstreamButton.title = project.archivedAt
+    ? 'Restore this workstream to the active list.'
+    : 'Archive this workstream and hide it from the default list.'
+  archiveWorkstreamButton.setAttribute('aria-label', project.archivedAt ? 'Restore workstream' : 'Archive workstream')
+  archiveWorkstreamButton.classList.toggle('danger-button', !project.archivedAt)
+
+  renderTerminalTabs()
+  renderWorkstreamDigest(detail)
+  updateTimelineControls()
+  void renderTimeline(detail)
+  renderRefinedLessons(detail.refinedLessons)
+  renderTouchedPaths(detail.touchedPaths)
+  renderSessions(detail.sessions)
+}
+
+function updateTimelineControls() {
+  const sessions = currentDetail?.sessions ?? []
+  const hasSessions = sessions.length > 0
+  renderTimelineOrderButton(hasSessions)
+  timelineToggleAllButton.disabled = !hasSessions
+  if (!hasSessions) {
+    timelineToggleAllButton.innerHTML = buttonContent('chevron-right', 'Collapse')
+    timelineToggleAllButton.title = 'Collapse timeline chats.'
+    return
+  }
+
+  const allCollapsed = sessions.every((session) => collapsedTimelineSessions.has(session.id))
+  timelineToggleAllButton.innerHTML = buttonContent(allCollapsed ? 'chevron-down' : 'chevron-right', allCollapsed ? 'Expand' : 'Collapse')
+  timelineToggleAllButton.title = allCollapsed ? 'Expand timeline chats.' : 'Collapse timeline chats.'
+}
+
+function renderTimelineOrderButton(enabled = (currentDetail?.sessions.length ?? 0) > 0) {
+  const oldestFirst = sessionOrder === 'oldest-first'
+  const currentLabel = oldestFirst ? 'Oldest first' : 'Newest first'
+  const nextLabel = oldestFirst ? 'newest first' : 'oldest first'
+  timelineOrderButton.disabled = !enabled
+  timelineOrderButton.innerHTML = iconMarkup(oldestFirst ? 'arrow-down' : 'arrow-up')
+  timelineOrderButton.title = `${currentLabel}. Click to show ${nextLabel}.`
+  timelineOrderButton.setAttribute('aria-label', `Timeline order: ${currentLabel}. Click to show ${nextLabel}.`)
+}
+
+function clampText(text: string, max = 260) {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= max) return normalized
+  return `${normalized.slice(0, max - 1).trim()}…`
+}
+
+function renderCandidatePills(candidates: ExtractionCandidate[]) {
+  if (!candidates.length) return ''
+  return `
+    <div class="timeline-pills">
+      ${candidates
+        .slice(0, 5)
+        .map((candidate) => `<span class="badge">${esc(candidate.kind)}</span>`)
+        .join('')}
+    </div>
+  `
+}
+
+function renderSessionEvidence(artifacts: ArtifactRecord[]) {
+  const evidence = artifacts
+    .filter((artifact) => artifact.kind === 'command' || artifact.kind === 'tool_call')
+    .slice(0, 6)
+  if (!evidence.length) return ''
+  return `
+    <div class="timeline-evidence">
+      ${evidence
+        .map(
+          (artifact) =>
+            `<span class="evidence-chip evidence-${esc(artifact.evidence ?? 'mentioned')}">${esc(clampText(artifact.detail ?? artifact.label, 84))}</span>`,
+        )
+        .join('')}
+    </div>
+  `
+}
+
+function groupTimelineMessages(messages: SessionMessageRecord[]): TimelineMessageGroup[] {
+  const groups: TimelineMessageGroup[] = []
+  for (const message of messages) {
+    const previous = groups[groups.length - 1]
+    if (previous?.role === message.role) {
+      previous.messages.push(message)
+    } else {
+      groups.push({ role: message.role, messages: [message] })
+    }
+  }
+  return groups
+}
+
+function timelineMessageGroupId(sessionId: string, group: TimelineMessageGroup) {
+  const ids = group.messages.map((message) => message.id).sort().join('|')
+  return `${sessionId}:${group.role}:${ids}`
+}
+
+function timelineGroupTitle(group: TimelineMessageGroup) {
+  if (group.role === 'user') return group.messages.length > 1 ? `You · ${group.messages.length} messages` : 'You'
+  if (group.role === 'assistant') return group.messages.length > 1 ? `Claude response · ${group.messages.length} parts` : 'Claude response'
+  if (group.role === 'terminal') return group.messages.length > 1 ? `Terminal · ${group.messages.length} entries` : 'Terminal'
+  return 'System'
+}
+
+function timelineGroupTimestamp(group: TimelineMessageGroup) {
+  const timestamps = group.messages.map((message) => message.timestamp).sort()
+  if (timestamps.length <= 1 || timestamps[0] === timestamps[timestamps.length - 1]) return timestamps[0] ?? ''
+  return `${timestamps[0]} - ${timestamps[timestamps.length - 1]}`
+}
+
+function timelineGroupExcerpt(group: TimelineMessageGroup) {
+  const maxLength = group.role === 'user' ? 240 : group.role === 'terminal' ? 200 : 220
+  return clampText(group.messages.map((message) => message.text).join(' '), maxLength)
+}
+
+function timelineGroupIsExpandable(group: TimelineMessageGroup, excerpt: string) {
+  const normalized = group.messages.map((message) => message.text).join(' ').replace(/\s+/g, ' ').trim()
+  return group.messages.length > 1 || normalized !== excerpt
+}
+
+function renderTimelineGroupFull(group: TimelineMessageGroup) {
+  if (group.messages.length === 1) {
+    return `<p>${esc(group.messages[0]?.text.trim() || '—')}</p>`
+  }
+
+  return `
+    <div class="timeline-message-parts">
+      ${group.messages
+        .map((message) => `
+          <div class="timeline-message-part">
+            <span class="timeline-message-part-marker" aria-hidden="true">&gt;</span>
+            <p>${esc(message.text.trim() || '—')}</p>
+          </div>
+        `)
+        .join('')}
+    </div>
+  `
+}
+
+function renderTimelineCardToggle(cardId: string, expanded: boolean) {
+  return `
+    <button
+      class="icon-button secondary-button timeline-card-toggle"
+      type="button"
+      data-card-id="${esc(cardId)}"
+      aria-expanded="${expanded ? 'true' : 'false'}"
+      title="${expanded ? 'Show less.' : 'Show full text.'}"
+      aria-label="${expanded ? 'Show less' : 'Show full text'}"
+    >
+      ${iconMarkup(expanded ? 'chevron-down' : 'chevron-right')}
+    </button>
+  `
+}
+
+function renderTimelineMessageGroup(
+  sessionId: string,
+  group: TimelineMessageGroup,
+  candidates: ExtractionCandidate[],
+) {
+  const role = group.role
+  const cardId = timelineMessageGroupId(sessionId, group)
+  const expanded = expandedTimelineCards.has(cardId)
+  const title = timelineGroupTitle(group)
+  const excerpt = timelineGroupExcerpt(group)
+  const expandable = timelineGroupIsExpandable(group, excerpt)
+  return `
+    <article class="timeline-event timeline-message timeline-message-group timeline-${esc(role)}${expanded ? ' expanded' : ''}" data-card-id="${esc(cardId)}">
+      <div class="timeline-dot"></div>
+      <div class="timeline-card">
+        <div class="timeline-card-header">
+          <span class="role-chip role-${esc(role)}">${esc(title)}</span>
+          <div class="timeline-card-header-actions">
+            <span class="meta">${esc(timelineGroupTimestamp(group))}</span>
+            ${expandable ? renderTimelineCardToggle(cardId, expanded) : ''}
+          </div>
+        </div>
+        <div class="timeline-message-excerpt">
+          <p>${esc(excerpt || '—')}</p>
+        </div>
+        ${
+          expandable
+            ? `<div class="timeline-message-full">${renderTimelineGroupFull(group)}</div>`
+            : ''
+        }
+        ${renderCandidatePills(candidates)}
+      </div>
+    </article>
+  `
+}
+
+function isTimelineNoiseMessage(message: SessionMessageRecord) {
+  const text = message.text.replace(/\s+/g, ' ').trim()
+  if (!text) return true
+  if (text === '[Request interrupted by user]') return true
+  if (/^\[(?:earlier|older) terminal (?:output|log) omitted/i.test(text)) return true
+  if (/^\[terminal log is empty\]/i.test(text)) return true
+  if (/^<local-command-(?:caveat|stdout|stderr)>/i.test(text)) return true
+  if (/^<command-name>.*<\/command-name>/i.test(text)) return true
+  if (/^gogoagent terminal log title\b/i.test(text)) return true
+  if (message.role === 'assistant' && /^login expired\s*[·.]\s*please run \/login\.?$/i.test(text)) return true
+  return false
+}
+
+function orderedTimelineMessages(messages: SessionMessageRecord[]) {
+  const timelineMessages = messages.filter((message) => (
+    message.role === 'user' || message.role === 'assistant' || message.role === 'terminal'
+  )).filter((message) => !isTimelineNoiseMessage(message))
+
+  const alreadyChronological = timelineMessages.every((message, index) => (
+    index === 0 || timelineMessages[index - 1].timestamp <= message.timestamp
+  ))
+  if (!alreadyChronological) {
+    timelineMessages.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+  }
+
+  return sessionOrder === 'oldest-first' ? timelineMessages : timelineMessages.reverse()
+}
+
+function renderTimelineSession(detail: SessionDetail, index: number) {
+  const collapsed = collapsedTimelineSessions.has(detail.session.id)
+  const messages = orderedTimelineMessages(detail.messages)
+  const messageGroups = groupTimelineMessages(messages)
+  const visibleGroups = messageGroups.slice(0, 28)
+  const candidatesByMessage = new Map<string, ExtractionCandidate[]>()
+  for (const candidate of detail.candidates) {
+    if (!candidate.sourceMessageId) continue
+    const group = candidatesByMessage.get(candidate.sourceMessageId) ?? []
+    group.push(candidate)
+    candidatesByMessage.set(candidate.sourceMessageId, group)
+  }
+  const sessionCandidates = detail.candidates.filter((candidate) => candidate.kind !== 'summary')
+  const overflow = messageGroups.slice(visibleGroups.length).reduce((sum, group) => sum + group.messages.length, 0)
+
+  return `
+    <section class="timeline-session${collapsed ? ' collapsed' : ''}" data-session-id="${esc(detail.session.id)}">
+      <article class="timeline-event timeline-boundary">
+        <div class="timeline-dot"></div>
+        <div class="timeline-card">
+          <div class="timeline-card-header">
+            <div>
+              <p class="eyebrow">Session ${index + 1}</p>
+              <h3>${esc(detail.session.title || detail.session.id)}</h3>
+            </div>
+            <div class="button-row timeline-session-actions">
+              <button
+                class="small-button timeline-toggle-button"
+                type="button"
+                data-session-id="${esc(detail.session.id)}"
+                aria-expanded="${collapsed ? 'false' : 'true'}"
+                title="${collapsed ? 'Show this chat in the timeline.' : 'Hide this chat in the timeline.'}"
+              >${buttonContent(collapsed ? 'chevron-right' : 'chevron-down', collapsed ? 'Show' : 'Hide')}</button>
+              <button class="small-button timeline-session-button" type="button" data-session-id="${esc(detail.session.id)}" title="Open the full transcript for this session.">${buttonContent('book-open', 'Transcript')}</button>
+            </div>
+          </div>
+          <p class="meta">${fmtDateRange(detail.session.startedAt, detail.session.updatedAt)} · ${detail.session.messageCount} msgs · ${detail.session.toolCallCount} tools · ${fmtNumber(detail.session.tokenCount)} tokens</p>
+          <p class="meta mono">${esc(detail.session.cwd)}</p>
+          ${renderCandidatePills(sessionCandidates)}
+          ${renderSessionEvidence(detail.artifacts)}
+        </div>
+      </article>
+      ${
+        collapsed
+          ? `
+            <article class="timeline-event timeline-collapsed">
+              <div class="timeline-dot"></div>
+              <div class="timeline-card">
+                <p class="meta">${messages.length} message${messages.length === 1 ? '' : 's'} hidden.</p>
+              </div>
+            </article>
+          `
+          : `
+            ${visibleGroups
+              .map((group) => renderTimelineMessageGroup(
+                detail.session.id,
+                group,
+                group.messages.flatMap((message) => candidatesByMessage.get(message.id) ?? []),
+              ))
+              .join('')}
+            ${
+              overflow > 0
+                ? `
+                  <article class="timeline-event timeline-overflow">
+                    <div class="timeline-dot"></div>
+                    <div class="timeline-card">
+                      <p class="meta">${overflow} more message${overflow === 1 ? '' : 's'} in this session. Open the transcript for the full record.</p>
+                    </div>
+                  </article>
+                `
+                : ''
+            }
+          `
+      }
+    </section>
+  `
+}
+
+function renderTimelineSessionPlaceholder(session: SessionRecord, index: number) {
+  return `
+    <section class="timeline-session timeline-loading" data-session-id="${esc(session.id)}">
+      <article class="timeline-event timeline-boundary">
+        <div class="timeline-dot"></div>
+        <div class="timeline-card">
+          <div class="timeline-card-header">
+            <div>
+              <p class="eyebrow">Session ${index + 1}</p>
+              <h3>${esc(session.title || session.id)}</h3>
+            </div>
+          </div>
+          <p class="meta">${fmtDateRange(session.startedAt, session.updatedAt)} · loading timeline...</p>
+          <p class="meta mono">${esc(session.cwd)}</p>
+        </div>
+      </article>
+    </section>
+  `
+}
+
+function renderTimelineSessionError(session: SessionRecord, index: number, error: unknown) {
+  return `
+    <section class="timeline-session timeline-loading" data-session-id="${esc(session.id)}">
+      <article class="timeline-event timeline-boundary">
+        <div class="timeline-dot"></div>
+        <div class="timeline-card">
+          <div class="timeline-card-header">
+            <div>
+              <p class="eyebrow">Session ${index + 1}</p>
+              <h3>${esc(session.title || session.id)}</h3>
+            </div>
+          </div>
+          <p class="meta">Timeline failed to load: ${esc((error as Error).message)}</p>
+          <p class="meta mono">${esc(session.cwd)}</p>
+        </div>
+      </article>
+    </section>
+  `
+}
+
+function replaceTimelineSession(sessionId: string, html: string) {
+  const existing = detailTimeline.querySelector<HTMLElement>(`.timeline-session[data-session-id="${CSS.escape(sessionId)}"]`)
+  if (existing) existing.outerHTML = html
+}
+
+function setTimelineCardExpanded(card: HTMLElement, expanded: boolean) {
+  const cardId = card.dataset.cardId
+  if (!cardId) return
+  if (expanded) expandedTimelineCards.add(cardId)
+  else expandedTimelineCards.delete(cardId)
+
+  card.classList.toggle('expanded', expanded)
+  const button = card.querySelector<HTMLButtonElement>('.timeline-card-toggle')
+  if (!button) return
+  button.innerHTML = iconMarkup(expanded ? 'chevron-down' : 'chevron-right')
+  button.setAttribute('aria-expanded', expanded ? 'true' : 'false')
+  button.title = expanded ? 'Show less.' : 'Show full text.'
+  button.setAttribute('aria-label', expanded ? 'Show less' : 'Show full text')
+}
+
+function handleTimelineClick(event: MouseEvent) {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const button = target.closest<HTMLButtonElement>('.timeline-session-button, .timeline-toggle-button, .timeline-card-toggle')
+  if (!button || !detailTimeline.contains(button)) return
+
+  if (button.classList.contains('timeline-card-toggle')) {
+    const card = button.closest<HTMLElement>('.timeline-message-group')
+    if (!card) return
+    setTimelineCardExpanded(card, !card.classList.contains('expanded'))
+    return
+  }
+
+  const sessionId = button.dataset.sessionId
+  if (!sessionId) return
+  if (button.classList.contains('timeline-session-button')) {
+    void openSessionTranscript(sessionId)
+  } else {
+    toggleTimelineSession(sessionId)
+  }
+}
+
+function renderTimeline(detail: ProjectDetail) {
+  const renderVersion = ++timelineRenderVersion
+  const projectId = detail.project.id
+  const sessions = sortSessionsForDisplay(detail.sessions)
+  if (!sessions.length) {
+    renderEmpty(detailTimeline, 'No session timeline available.')
+    return
+  }
+
+  detailTimeline.innerHTML = sessions
+    .map((session, index) => renderTimelineSessionPlaceholder(session, index))
+    .join('')
+
+  let nextIndex = 0
+  const loadNextSession = async (): Promise<void> => {
+    const index = nextIndex
+    nextIndex += 1
+    const session = sessions[index]
+    if (!session) return
+
+    try {
+      const sessionDetail = await getSessionDetail(session.id)
+      if (timelineRenderVersion !== renderVersion || currentDetail?.project.id !== projectId) return
+      replaceTimelineSession(session.id, renderTimelineSession(sessionDetail, index))
+      if (currentDetail) renderWorkstreamDigest(currentDetail)
+    } catch (error) {
+      if (timelineRenderVersion !== renderVersion || currentDetail?.project.id !== projectId) return
+      replaceTimelineSession(session.id, renderTimelineSessionError(session, index, error))
+      if (currentDetail) renderWorkstreamDigest(currentDetail)
+    }
+    await loadNextSession()
+  }
+
+  for (let i = 0; i < Math.min(TIMELINE_DETAIL_CONCURRENCY, sessions.length); i += 1) {
+    void loadNextSession()
+  }
+}
+
+function renderRefinedLessons(lessons: RefinedLesson[]) {
+  if (!lessons.length) {
+    renderEmpty(detailRefined, 'No refined lessons yet. Click "Extract lessons" to run an LLM pass.')
+    return
+  }
+  detailRefined.innerHTML = lessons
+    .map((lesson) => {
+      const scopeChip = `<span class="badge subtle">${esc(lesson.scope)}</span>`
+      return `
+        <div class="compact-item">
+          <h3>${esc(lesson.rule)}</h3>
+          <p class="meta">${esc(lesson.why)}</p>
+          <span class="chip-row">${scopeChip}</span>
+        </div>
+      `
+    })
+    .join('')
+}
+
+function renderTouchedPaths(paths: WorkLocationRecord[]) {
+  if (!paths.length) {
+    renderEmpty(detailPaths, 'No meaningful work areas yet.')
+    return
+  }
+  const visible = paths.slice(0, 12)
+  const hiddenCount = paths.length - visible.length
+  detailPaths.innerHTML = [
+    ...visible.map(
+      (loc) => {
+        const writeCount = loc.writeCount ?? 0
+        const readCount = loc.readCount ?? 0
+        const pieces = [
+          writeCount > 0 ? `${fmtNumber(writeCount)} write${writeCount === 1 ? '' : 's'}` : '',
+          readCount > 0 ? `${fmtNumber(readCount)} read${readCount === 1 ? '' : 's'}` : '',
+          (loc.activeMs ?? 0) > 0 ? `${fmtDuration(loc.activeMs)} active` : '',
+          `${fmtRelative(loc.lastActivityAt)}`,
+        ].filter(Boolean)
+        return `
+        <div class="compact-item">
+          <h3>${esc(loc.path)}</h3>
+          <p class="meta">
+            <span class="evidence-chip evidence-${esc(loc.evidence)}">${esc(loc.evidence)}</span>
+            · ${pieces.map(esc).join(' · ')}
+          </p>
+        </div>
+      `
+      },
+    ),
+    hiddenCount > 0
+      ? `<p class="meta compact-note">${hiddenCount} lower-ranked work area${hiddenCount === 1 ? '' : 's'} hidden.</p>`
+      : '',
+  ].join('')
+}
+
+function renderSessions(sessions: SessionRecord[]) {
+  if (!sessions.length) {
+    renderEmpty(detailSessions, 'No sessions.')
+    return
+  }
+  detailSessions.innerHTML = sessions
+    .slice()
+    .sort((a, b) => (
+      sessionOrder === 'oldest-first'
+        ? a.startedAt.localeCompare(b.startedAt)
+        : b.startedAt.localeCompare(a.startedAt)
+    ))
+    .map((s) => {
+      const lessonBadge = (s.lessonCount ?? 0) > 0 ? ` · ${s.lessonCount} lesson${s.lessonCount === 1 ? '' : 's'}` : ''
+      return `
+        <div class="compact-item">
+          <div class="item-heading-row">
+            <h3>${esc(s.title || s.id)}</h3>
+            <button class="small-button session-transcript-button" type="button" data-session-id="${esc(s.id)}" title="Open the full transcript for this session.">${buttonContent('book-open', 'Transcript')}</button>
+          </div>
+          <p class="meta">${fmtRelative(s.updatedAt)} · ${s.messageCount} msgs · ${s.toolCallCount} tools · ${fmtNumber(s.tokenCount)} tokens${lessonBadge}</p>
+          <p class="meta mono">${esc(s.transcriptPath)}</p>
+        </div>
+      `
+    })
+    .join('')
+
+  detailSessions.querySelectorAll<HTMLButtonElement>('.session-transcript-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const sessionId = button.dataset.sessionId
+      if (!sessionId) return
+      void openSessionTranscript(sessionId)
+    })
+  })
+}
+
+function rerenderTimelineAndSessions() {
+  if (!currentDetail) return
+  void renderTimeline(currentDetail)
+  renderSessions(currentDetail.sessions)
+}
+
+function toggleTimelineSession(sessionId: string) {
+  if (collapsedTimelineSessions.has(sessionId)) {
+    collapsedTimelineSessions.delete(sessionId)
+  } else {
+    collapsedTimelineSessions.add(sessionId)
+  }
+  saveCollapsedTimelineSessions()
+  rerenderTimelineAndSessions()
+  updateTimelineControls()
+}
+
+function toggleAllTimelineSessions() {
+  if (!currentDetail) return
+  const allCollapsed = currentDetail.sessions.every((session) => collapsedTimelineSessions.has(session.id))
+  if (allCollapsed) {
+    for (const session of currentDetail.sessions) collapsedTimelineSessions.delete(session.id)
+  } else {
+    for (const session of currentDetail.sessions) collapsedTimelineSessions.add(session.id)
+  }
+  saveCollapsedTimelineSessions()
+  rerenderTimelineAndSessions()
+  updateTimelineControls()
+}
+
+function renderSettingsControls() {
+  sessionOrderOldestInput.checked = sessionOrder === 'oldest-first'
+  sessionOrderNewestInput.checked = sessionOrder === 'newest-first'
+  contextClaudeToCodexInput.checked = contextSharingSettings.claudeToCodex
+  contextCodexToClaudeInput.checked = contextSharingSettings.codexToClaude
+  renderTimelineOrderButton()
+}
+
+function setSessionOrder(order: SessionOrder) {
+  if (sessionOrder === order) return
+  sessionOrder = order
+  localStorage.setItem(SESSION_ORDER_STORAGE_KEY, order)
+  renderSettingsControls()
+  rerenderTimelineAndSessions()
+}
+
+function setContextSharing(patch: Partial<ContextSharingSettings>) {
+  contextSharingSettings = { ...contextSharingSettings, ...patch }
+  saveContextSharingSettings()
+  renderSettingsControls()
+}
+
+function normalizeResumeMessageText(text: string) {
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function clampResumeBlock(text: string, maxChars: number) {
+  const normalized = normalizeResumeMessageText(text)
+  if (normalized.length <= maxChars) return normalized
+  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}…`
+}
+
+function isUsefulResumeMessage(message: SessionMessageRecord) {
+  const text = normalizeResumeMessageText(message.text)
+  if (!text) return false
+  if (message.role === 'system') return false
+  if (text === '[Request interrupted by user]') return false
+  if (text.startsWith('<local-command-caveat>')) return false
+  if (text.startsWith('<local-command-stdout>')) return false
+  if (text.includes('<command-name>') || text.includes('<command-message>')) return false
+  return true
+}
+
+async function buildResumeTranscriptContext(detail: ProjectDetail) {
+  const recentSessions = detail.sessions
+    .slice()
+    .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+    .slice(-RESUME_TRANSCRIPT_SESSION_LIMIT)
+
+  if (!recentSessions.length) return ['- No prior transcript messages available.']
+
+  const details = await Promise.all(
+    recentSessions.map(async (session) => {
+      try {
+        return await getSessionDetail(session.id)
+      } catch {
+        return null
+      }
+    }),
+  )
+
+  const messages = details
+    .filter((entry): entry is SessionDetail => entry !== null)
+    .flatMap((entry) =>
+      entry.messages
+        .filter(isUsefulResumeMessage)
+        .map((message) => ({ session: entry.session, message })),
+    )
+    .sort((a, b) => a.message.timestamp.localeCompare(b.message.timestamp))
+    .slice(-RESUME_TRANSCRIPT_MESSAGE_LIMIT)
+
+  if (!messages.length) return ['- No useful transcript messages available.']
+
+  const lines: string[] = []
+  let remainingChars = RESUME_TRANSCRIPT_CHAR_BUDGET
+  for (const { session, message } of messages) {
+    if (remainingChars <= 0) break
+
+    const header = `[${message.timestamp}] ${message.role.toUpperCase()} · ${clampText(session.title || session.id, 80)}`
+    const body = clampResumeBlock(message.text, Math.min(RESUME_TRANSCRIPT_MESSAGE_CHARS, remainingChars))
+    if (!body) continue
+    lines.push(header, body, '')
+    remainingChars -= header.length + body.length + 2
+  }
+
+  return lines.length ? lines : ['- Transcript messages were too large to include.']
+}
+
+function bridgeSourceLabel(targetKind: AgentTerminalKind) {
+  return targetKind === 'codex' ? 'Claude Code' : 'Codex'
+}
+
+function bridgeTargetLabel(targetKind: AgentTerminalKind) {
+  return targetKind === 'codex' ? 'Codex' : 'Claude Code'
+}
+
+async function buildBridgeContext(detail: ProjectDetail, targetKind: AgentTerminalKind) {
+  const statusNote = workstreamStatusNote(detail.project.id)
+  const sourceLabel = bridgeSourceLabel(targetKind)
+  const targetLabel = bridgeTargetLabel(targetKind)
+  const recentSessions = sessionsForBridgeTarget(detail, targetKind)
+    .slice()
+    .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+    .slice(-BRIDGE_SESSION_LIMIT)
+
+  const sessionDetails = (await Promise.all(
+    recentSessions.map(async (session) => {
+      try {
+        return await getSessionDetail(session.id)
+      } catch {
+        return null
+      }
+    }),
+  )).filter((entry): entry is SessionDetail => entry !== null)
+
+  const extractedNotes = sessionDetails
+    .flatMap((sessionDetail) => (
+      sessionDetail.candidates
+        .filter((candidate) => candidate.kind !== 'summary')
+        .map((candidate) => `- ${candidate.kind}: ${clampResumeBlock(candidate.text, 320)}`)
+    ))
+    .slice(-BRIDGE_CANDIDATE_LIMIT)
+
+  const lessons = detail.refinedLessons
+    .slice(0, 8)
+    .map((lesson) => `- ${lesson.rule}\n  Why: ${lesson.why}`)
+
+  return [
+    `Cross-agent memory bridge for ${targetLabel}.`,
+    '',
+    `Workstream: ${detail.project.name}`,
+    `Repo: ${detail.project.repoRoot}`,
+    detail.project.branch ? `Branch: ${detail.project.branch}` : undefined,
+    statusNote ? `Current status note: ${statusNote}` : undefined,
+    '',
+    `Source context: recent ${sourceLabel} work only.`,
+    'Boundary: this is memory-level handoff context, not a deep transcript resume.',
+    '',
+    `${sourceLabel} sessions included:`,
+    ...(recentSessions.length
+      ? recentSessions.map((session) => `- ${session.title || session.id} (${fmtRelative(session.updatedAt)})`)
+      : [`- No ${sourceLabel} sessions included by current memory-sharing settings.`]),
+    '',
+    'Shared lessons/corrections:',
+    ...(lessons.length ? lessons : ['- No refined lessons yet.']),
+    '',
+    'Extracted notes from source agent:',
+    ...(extractedNotes.length ? extractedNotes : ['- No extracted notes available yet.']),
+    '',
+    'Instructions:',
+    '- Treat this as compact background guidance from another agent.',
+    '- Do not assume it is complete; inspect the current repo state before changing files.',
+    '- If this conflicts with the current terminal or repo state, trust the current state.',
+  ].filter((line): line is string => line !== undefined).join('\n')
+}
+
+async function buildResumeContext(detail: ProjectDetail) {
+  const sessions = detail.sessions
+    .slice()
+    .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+  const recentSessions = sessions.slice(-4)
+  const statusNote = workstreamStatusNote(detail.project.id)
+  const topPaths = detail.touchedPaths
+    .slice(0, 12)
+    .map((loc) => {
+      const activity = [
+        (loc.writeCount ?? 0) > 0 ? `${loc.writeCount} writes` : undefined,
+        (loc.readCount ?? 0) > 0 ? `${loc.readCount} reads` : undefined,
+        (loc.activeMs ?? 0) > 0 ? `${fmtDuration(loc.activeMs)} active` : undefined,
+      ].filter((entry): entry is string => Boolean(entry))
+      return `- ${loc.path} (${loc.evidence}${activity.length ? `, ${activity.join(', ')}` : ''})`
+    })
+  const lessons = detail.refinedLessons
+    .slice(0, 12)
+    .map((lesson) => `- ${lesson.rule}\n  Why: ${lesson.why}`)
+  const transcriptContext = await buildResumeTranscriptContext(detail)
+  const noIncludedSessionsText = '- No prior sessions in this workstream.'
+
+  return [
+    'Continue this workstream using the context below.',
+    '',
+    `Workstream: ${detail.project.name}`,
+    `Repo: ${detail.project.repoRoot}`,
+    detail.project.branch ? `Branch: ${detail.project.branch}` : undefined,
+    statusNote ? `Current status note: ${statusNote}` : undefined,
+    `Time range: ${fmtDateRange(detail.project.firstStartedAt, detail.project.lastUpdatedAt)}`,
+    `Sessions already recorded: ${detail.project.sessionCount}`,
+    '',
+    'gogoagent resume policy:',
+    '- Claude launches with native `claude --resume` when a prior Claude session id is available.',
+    '- Codex does not get a native transcript resume here; gogoagent pastes this context into the prompt for review.',
+    '- Shell terminals receive no automatic context.',
+    '- Cross-agent memory bridge packets are separate from this deep workstream resume context.',
+    '',
+    'Recent sessions:',
+    ...(recentSessions.length
+      ? recentSessions.map((session) => `- ${session.title || session.id} (${session.updatedAt})`)
+      : [noIncludedSessionsText]),
+    '',
+    'Important work areas from previous work:',
+    ...(topPaths.length ? topPaths : ['- No meaningful work areas detected yet.']),
+    '',
+    'Reusable lessons/corrections:',
+    ...(lessons.length ? lessons : ['- No refined lessons yet. Use the timeline and transcript evidence if needed.']),
+    '',
+    'Recent transcript excerpts:',
+    ...transcriptContext,
+    '',
+    'Instructions:',
+    '- Treat the above as prior context, not a fresh task by itself.',
+    '- Before making changes, inspect the current repo state.',
+    '- Prefer the repo conventions and commands already visible in this workstream.',
+    '- If the context is stale or ambiguous, ask a narrow clarification before doing broad edits.',
+  ].filter((line): line is string => line !== undefined).join('\n')
+}
+
+function setRenameEditing(editing: boolean) {
+  detailTitle.classList.toggle('hidden', editing)
+  renameInput.classList.toggle('hidden', !editing)
+  renameWorkstreamButton.classList.toggle('hidden', editing)
+  archiveWorkstreamButton.classList.toggle('hidden', editing)
+  suggestTitleButton.classList.toggle('hidden', editing)
+  renameSaveButton.classList.toggle('hidden', !editing)
+  renameCancelButton.classList.toggle('hidden', !editing)
+}
+
+function startInlineRename() {
+  if (!currentDetail) return
+  renameInput.value = currentDetail.project.name
+  renameStatus.textContent = ''
+  renameSaveButton.disabled = false
+  renameCancelButton.disabled = false
+  setRenameEditing(true)
+  window.setTimeout(() => {
+    renameInput.focus()
+    renameInput.select()
+  }, 0)
+}
+
+function cancelInlineRename() {
+  renameStatus.textContent = ''
+  renameSaveButton.disabled = false
+  renameCancelButton.disabled = false
+  setRenameEditing(false)
+}
+
+async function saveWorkstreamName() {
+  if (!currentDetail) return
+
+  const projectId = currentDetail.project.id
+  const name = renameInput.value.trim()
+  if (name.length < 3) {
+    renameStatus.textContent = 'Use at least 3 characters.'
+    return
+  }
+
+  if (name === currentDetail.project.name) {
+    cancelInlineRename()
+    return
+  }
+
+  renameSaveButton.disabled = true
+  renameCancelButton.disabled = true
+  renameStatus.textContent = 'Saving name...'
+  try {
+    const response = await window.gogoagent.workstreams.rename(projectId, name)
+    projects = projects.map((project) => project.id === projectId ? response.project : project)
+    currentDetail = { ...currentDetail, project: response.project }
+    setCachedValue(projectDetailCache, projectId, currentDetail)
+    renderProjectsList()
+    renderDetail(currentDetail)
+    setRenameEditing(false)
+    renameStatus.textContent = ''
+  } catch (error) {
+    renameStatus.textContent = `Rename failed: ${(error as Error).message}`
+  } finally {
+    renameSaveButton.disabled = false
+    renameCancelButton.disabled = false
+  }
+}
+
+async function toggleWorkstreamArchive() {
+  if (!currentDetail) return
+
+  const project = currentDetail.project
+  const archived = Boolean(project.archivedAt)
+  archiveWorkstreamButton.disabled = true
+  renameStatus.textContent = archived ? 'Restoring workstream...' : 'Archiving workstream...'
+
+  try {
+    const response = archived
+      ? await window.gogoagent.workstreams.restore(project.id)
+      : await window.gogoagent.workstreams.archive(project.id)
+
+    if (archived) {
+      selectedProjectId = null
+      currentDetail = null
+      showArchivedWorkstreams = false
+      projects = []
+      await loadAllProjects()
+      await selectProject(response.project.id)
+      return
+    }
+
+    currentDetail = { ...currentDetail, project: response.project }
+    projectDetailCache.delete(response.project.id)
+    syncProjectFromDetail(response.project)
+    showEmptyDetail('Workstream archived.')
+  } catch (error) {
+    renameStatus.textContent = `${archived ? 'Restore' : 'Archive'} failed: ${(error as Error).message}`
+  } finally {
+    archiveWorkstreamButton.disabled = false
+  }
+}
+
+async function copyResumeContext(button: HTMLButtonElement) {
+  if (!currentDetail) return
+  await copyText(await buildResumeContext(currentDetail))
+  flashButton(button, 'Copied')
+}
+
+function transcriptPlainText(view: TranscriptView) {
+  const lines = [`# ${view.title}`, '', `${view.subtitle}`, view.meta, '']
+  for (const section of view.sections) {
+    lines.push(`## ${section.session.title || section.session.id}`)
+    lines.push(`Session: ${section.session.id}`)
+    lines.push(`Started: ${section.session.startedAt}`)
+    lines.push(`Updated: ${section.session.updatedAt}`)
+    lines.push('')
+    for (const message of section.messages) {
+      lines.push(`[${message.timestamp}] ${message.role.toUpperCase()}`)
+      lines.push(message.text)
+      lines.push('')
+    }
+  }
+  return lines.join('\n')
+}
+
+function renderTranscriptDialog() {
+  if (!activeTranscript) return
+  const query = transcriptSearch.value.trim()
+  transcriptSubtitle.textContent = activeTranscript.subtitle
+  transcriptTitle.textContent = activeTranscript.title
+  transcriptMeta.textContent = activeTranscript.meta
+
+  const html = activeTranscript.sections
+    .map((section) => {
+      const messages = query
+        ? section.messages.filter((message) => message.text.toLowerCase().includes(query.toLowerCase()))
+        : section.messages
+      const commandArtifacts = section.artifacts
+        .filter((artifact) => artifact.kind === 'command' || artifact.kind === 'tool_call')
+        .slice(0, 8)
+      const candidateChips = section.candidates
+        .filter((candidate) => candidate.kind !== 'summary')
+        .slice(0, 6)
+
+      return `
+        <section class="transcript-session">
+          <header class="transcript-session-header">
+            <div>
+              <h3>${esc(section.session.title || section.session.id)}</h3>
+              <p class="meta">${fmtDateRange(section.session.startedAt, section.session.updatedAt)} · ${section.session.messageCount} msgs · ${section.session.toolCallCount} tools · ${fmtNumber(section.session.tokenCount)} tokens</p>
+            </div>
+            <span class="badge subtle">${esc(section.session.gitBranch ?? 'no branch')}</span>
+          </header>
+          ${
+            commandArtifacts.length
+              ? `<div class="transcript-evidence">${commandArtifacts.map((artifact) => `<span class="evidence-chip evidence-${esc(artifact.evidence ?? 'mentioned')}">${esc(artifact.detail ?? artifact.label)}</span>`).join('')}</div>`
+              : ''
+          }
+          ${
+            candidateChips.length
+              ? `<div class="transcript-candidates">${candidateChips.map((candidate) => `<span class="badge">${esc(candidate.kind)}</span>`).join('')}</div>`
+              : ''
+          }
+          <div class="transcript-messages">
+            ${
+              messages.length
+                ? messages.map((message) => `
+                    <article class="transcript-message">
+                      <div class="transcript-message-meta">
+                        <span class="role-chip role-${esc(message.role)}">${esc(message.role)}</span>
+                        <span>${esc(message.timestamp)}</span>
+                      </div>
+                      <pre>${highlight(message.text, query)}</pre>
+                    </article>
+                  `).join('')
+                : `<p class="empty">${query ? 'No messages match this transcript search.' : 'No transcript messages.'}</p>`
+            }
+          </div>
+        </section>
+      `
+    })
+    .join('')
+
+  transcriptBody.innerHTML = html || '<p class="empty">No transcript loaded.</p>'
+}
+
+async function openSessionTranscript(sessionId: string) {
+  transcriptSearch.value = ''
+  transcriptBody.innerHTML = '<p class="empty">Loading transcript…</p>'
+  transcriptDialog.showModal()
+  try {
+    const detail = await getSessionDetail(sessionId)
+    activeTranscript = {
+      title: detail.session.title || detail.session.id,
+      subtitle: 'Session transcript',
+      meta: `${detail.session.cwd} · ${detail.session.messageCount} messages · ${detail.session.toolCallCount} tools`,
+      sections: [{
+        session: detail.session,
+        artifacts: detail.artifacts,
+        candidates: detail.candidates,
+        messages: detail.messages,
+      }],
+    }
+    renderTranscriptDialog()
+  } catch (error) {
+    transcriptTitle.textContent = 'Transcript failed to load'
+    transcriptMeta.textContent = (error as Error).message
+    transcriptBody.innerHTML = ''
+  }
+}
+
+async function openWorkstreamTranscript() {
+  if (!currentDetail) return
+  transcriptSearch.value = ''
+  transcriptBody.innerHTML = '<p class="empty">Loading transcript series…</p>'
+  transcriptDialog.showModal()
+
+  try {
+    const details = await Promise.all(
+      currentDetail.sessions
+        .slice()
+        .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+        .map((session) => getSessionDetail(session.id)),
+    )
+    activeTranscript = {
+      title: currentDetail.project.name,
+      subtitle: 'Workstream transcript',
+      meta: `${currentDetail.project.repoRoot} · ${details.length} session${details.length === 1 ? '' : 's'} · ${fmtDateRange(currentDetail.project.firstStartedAt, currentDetail.project.lastUpdatedAt)}`,
+      sections: details.map((detail) => ({
+        session: detail.session,
+        artifacts: detail.artifacts,
+        candidates: detail.candidates,
+        messages: detail.messages,
+      })),
+    }
+    renderTranscriptDialog()
+  } catch (error) {
+    transcriptTitle.textContent = 'Transcript failed to load'
+    transcriptMeta.textContent = (error as Error).message
+    transcriptBody.innerHTML = ''
+  }
+}
+
+async function copyTranscript() {
+  if (!activeTranscript) return
+  await copyText(transcriptPlainText(activeTranscript))
+  flashButton(copyTranscriptButton, 'Copied')
+}
+
+// ---------- Refine ----------
+async function runRefine() {
+  if (!selectedProjectId) return
+  refineButton.disabled = true
+  refineStatus.textContent = 'Generating takeaways…'
+  try {
+    const job = await window.gogoagent.lessons.refine({ projectId: selectedProjectId })
+    pollRefineJob(job.jobId)
+  } catch (error) {
+    refineStatus.textContent = `Failed to start: ${(error as Error).message}`
+    refineButton.disabled = false
+  }
+}
+
+async function runSuggestTitle() {
+  if (!selectedProjectId) return
+  suggestTitleButton.disabled = true
+  renameStatus.textContent = 'Suggesting title...'
+  try {
+    const result = await window.gogoagent.projects.suggestTitle(selectedProjectId)
+    detailTitle.textContent = result.name
+    await loadAllProjects()
+    renameStatus.textContent = result.summary ? `Suggested: ${result.summary}` : 'Title updated.'
+  } catch (error) {
+    renameStatus.textContent = `Title suggestion failed: ${(error as Error).message}`
+  } finally {
+    suggestTitleButton.disabled = false
+  }
+}
+
+function pollRefineJob(jobId: string) {
+  if (refinePollTimer !== null) window.clearTimeout(refinePollTimer)
+  const tick = async () => {
+    try {
+      const job = await window.gogoagent.lessons.getRefineStatus(jobId)
+      refineStatus.textContent = `Takeaways ${job.state}: ${job.processed}/${job.total} processed, ${job.skipped} skipped${job.errors.length ? `, ${job.errors.length} errors` : ''}`
+      if (job.state === 'done' || job.state === 'error') {
+        refineButton.disabled = false
+        // Reload detail to pick up new refined lessons.
+        if (selectedProjectId) {
+          try {
+            currentDetail = await getProjectDetail(selectedProjectId)
+            syncProjectFromDetail(currentDetail.project)
+            renderRefinedLessons(currentDetail.refinedLessons)
+          } catch {
+            // Leave previous detail in place.
+          }
+        }
+        return
+      }
+      refinePollTimer = window.setTimeout(tick, 1500)
+    } catch (error) {
+      refineStatus.textContent = `Polling failed: ${(error as Error).message}`
+      refineButton.disabled = false
+    }
+  }
+  refinePollTimer = window.setTimeout(tick, 500)
+}
+
+// ---------- Workstream Labels ----------
+function describeLabelJob(job: RefineJobStatus) {
+  const errors = job.errors.length ? `, ${job.errors.length} errors` : ''
+  const skipped = job.skipped ? `, ${job.skipped} cached` : ''
+  const generated = job.generated ?? 0
+  if (job.state === 'done' && job.skipped === job.total) return `Labels already current (${job.total}); refreshed list.`
+  if (job.state === 'done') return `Applied ${generated} new label${generated === 1 ? '' : 's'}${skipped}; refreshed list${errors}.`
+  if (job.state === 'error') return `Labeling ended with errors: ${generated} applied, ${job.processed}/${job.total} checked${skipped}${errors}.`
+  return `Labeling names: ${job.processed}/${job.total}${skipped}${errors}.`
+}
+
+function readAutoNameSeenWorkstreams() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(AUTO_NAME_SEEN_STORAGE_KEY) ?? '[]') as unknown
+    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [])
+  } catch {
+    return new Set<string>()
+  }
+}
+
+function writeAutoNameSeenWorkstreams(ids: Set<string>) {
+  localStorage.setItem(AUTO_NAME_SEEN_STORAGE_KEY, JSON.stringify([...ids]))
+}
+
+function autoNameNewWorkstreams() {
+  if (showArchivedWorkstreams) return
+  if (labelJobInFlight || projects.length === 0) return
+
+  const seen = readAutoNameSeenWorkstreams()
+  const labelableProjects = projects.filter((project) => !project.draft && project.sessionCount > 0)
+  const newProjectIds = labelableProjects.map((project) => project.id).filter((id) => !seen.has(id))
+  if (newProjectIds.length === 0) return
+
+  for (const project of labelableProjects) seen.add(project.id)
+  writeAutoNameSeenWorkstreams(seen)
+  void labelWorkstreamNames({ projectIds: newProjectIds, automatic: true })
+}
+
+async function labelWorkstreamNames(options: { projectIds?: string[]; automatic?: boolean } = {}) {
+  if (labelJobInFlight) {
+    if (!options.automatic) labelWorkstreamsStatus.textContent = 'Labeling already running.'
+    return
+  }
+
+  const targetProjectIds = options.projectIds ?? filterProjects().map((project) => project.id)
+  if (!targetProjectIds.length) {
+    if (!options.automatic) labelWorkstreamsStatus.textContent = 'No workstreams to label.'
+    return
+  }
+
+  labelJobInFlight = true
+  labelWorkstreamsStatus.textContent = options.automatic
+    ? `Naming ${targetProjectIds.length} new workstream${targetProjectIds.length === 1 ? '' : 's'}...`
+    : 'Starting label job...'
+  try {
+    const job = await window.gogoagent.workstreams.label({ projectIds: targetProjectIds })
+    pollLabelJob(job.jobId, { automatic: options.automatic })
+  } catch (error) {
+    const message = (error as Error).message
+    labelWorkstreamsStatus.textContent = message.includes('/workstreams/label -> 404')
+      ? 'Labeling route is missing from the running sidecar. Restart gogoagent so the sidecar picks up the latest code.'
+      : `Labeling failed to start: ${message}`
+    labelJobInFlight = false
+  }
+}
+
+function pollLabelJob(jobId: string, options: { automatic?: boolean } = {}) {
+  if (labelPollTimer !== null) window.clearTimeout(labelPollTimer)
+  const tick = async () => {
+    try {
+      const job = await window.gogoagent.workstreams.getLabelStatus(jobId)
+      const statusText = describeLabelJob(job)
+      labelWorkstreamsStatus.textContent = statusText
+      if (job.state === 'done' || job.state === 'error') {
+        labelJobInFlight = false
+        labelPollTimer = null
+        await window.gogoagent.debug.rescan()
+        await loadAllProjects()
+        labelWorkstreamsStatus.textContent = statusText
+        if (options.automatic && job.state === 'done' && job.errors.length === 0) {
+          window.setTimeout(() => {
+            if (labelWorkstreamsStatus.textContent === statusText) labelWorkstreamsStatus.textContent = ''
+          }, 4500)
+        }
+        return
+      }
+      labelPollTimer = window.setTimeout(tick, 1500)
+    } catch (error) {
+      labelWorkstreamsStatus.textContent = `Label polling failed: ${(error as Error).message}`
+      labelJobInFlight = false
+      labelPollTimer = null
+    }
+  }
+  labelPollTimer = window.setTimeout(tick, 500)
+}
+
+// ---------- Debug dialog ----------
+async function loadDebugState() {
+  try {
+    const state = await window.gogoagent.debug.getState()
+    debugLastScan.textContent = state.lastScan.inProgress
+      ? 'Scan in progress…'
+      : state.lastScan.finishedAt
+        ? `Last scan: ${fmtRelative(state.lastScan.finishedAt)} · ${state.lastScan.ok ? 'ok' : 'error'}${state.lastScan.durationMs ? ` · ${state.lastScan.durationMs}ms` : ''}`
+        : 'No scan yet.'
+
+    debugPathsList.innerHTML = state.paths
+      .map(
+        (p) =>
+          `<li><span class="debug-pill ${p.exists ? 'ok' : 'error'}">${p.exists ? 'exists' : 'missing'}</span> <code>${esc(p.path)}</code>${p.entryCount !== undefined ? ` <span class="meta">· ${p.entryCount} entries</span>` : ''}</li>`,
+      )
+      .join('')
+
+    debugStepsList.innerHTML = state.steps
+      .map(
+        (step) =>
+          `<li><span class="debug-pill ${step.status}">${step.status}</span> ${esc(step.name)}${step.count !== undefined ? ` · ${step.count}` : ''}${step.durationMs ? ` · ${step.durationMs}ms` : ''}${step.error ? ` <span class="meta">· ${esc(step.error)}</span>` : ''}</li>`,
+      )
+      .join('')
+
+    debugCountsList.innerHTML = Object.entries(state.counts)
+      .map(([key, value]) => `<li><code>${esc(key)}</code>: ${value}</li>`)
+      .join('')
+
+    debugErrorsList.innerHTML = state.errors.length
+      ? state.errors.map((e) => `<li><span class="debug-pill error">error</span> ${esc(e.where)} · ${esc(e.message)}</li>`).join('')
+      : '<li class="meta">None.</li>'
+  } catch (error) {
+    debugLastScan.textContent = `Failed to load debug: ${(error as Error).message}`
+  }
+}
+
+async function rescan() {
+  debugLastScan.textContent = 'Rescanning…'
+  try {
+    await window.gogoagent.debug.rescan()
+    await loadDebugState()
+    await loadAllProjects()
+  } catch (error) {
+    debugLastScan.textContent = `Rescan failed: ${(error as Error).message}`
+  }
+}
+
+// ---------- Boot ----------
+hydrateIconPlaceholders()
+renderSettingsControls()
+
+async function toggleArchivedWorkstreams() {
+  showArchivedWorkstreams = !showArchivedWorkstreams
+  projects = []
+  projectsSearch.value = ''
+  showEmptyDetail(showArchivedWorkstreams ? 'Select an archived workstream.' : 'Select a workstream.')
+  await loadAllProjects()
+}
+
+async function loadAllProjects() {
+  try {
+    pruneCache(projectDetailCache, PROJECT_DETAIL_CACHE_MS)
+    pruneCache(sessionDetailCache, SESSION_DETAIL_CACHE_MS)
+    const listedProjects = await window.gogoagent.projects.list({ archived: showArchivedWorkstreams })
+    setAppNotice('')
+    projects = sortProjectsByActivity(listedProjects)
+    renderProjectsList()
+    // Re-select current project if it still exists, so UI stays put across refreshes.
+    if (selectedProjectId && projects.some((p) => p.id === selectedProjectId)) {
+      await selectProject(selectedProjectId)
+    } else if (selectedProjectId) {
+      showEmptyDetail(showArchivedWorkstreams ? 'Select an archived workstream.' : 'Select a workstream.')
+    }
+    autoNameNewWorkstreams()
+  } catch (error) {
+    const message = `Failed to load workstreams: ${(error as Error).message}`
+    setAppNotice(message)
+    renderEmpty(projectsList, message)
+  }
+}
+
+refreshButton.addEventListener('click', () => {
+  void checkHealth()
+  void loadAllProjects()
+})
+projectsSearch.addEventListener('input', renderProjectsList)
+showArchivedButton.addEventListener('click', () => void toggleArchivedWorkstreams())
+timelineToggleAllButton.addEventListener('click', () => toggleAllTimelineSessions())
+detailTimeline.addEventListener('click', handleTimelineClick)
+globalCwdInput.value = localStorage.getItem(GLOBAL_CWD_STORAGE_KEY) ?? ''
+globalCwdInput.addEventListener('keydown', (event) => {
+  if (event.key !== 'Tab' || event.altKey || event.ctrlKey || event.metaKey) return
+  event.preventDefault()
+  void cycleGlobalCwdCompletion(event.shiftKey)
+})
+globalCwdInput.addEventListener('input', () => {
+  cwdCompletionState = null
+})
+globalCwdInput.addEventListener('change', () => {
+  const cwd = globalCwdInput.value.trim()
+  if (cwd) localStorage.setItem(GLOBAL_CWD_STORAGE_KEY, cwd)
+  else localStorage.removeItem(GLOBAL_CWD_STORAGE_KEY)
+  cwdCompletionState = null
+})
+globalUseCurrentButton.addEventListener('click', () => useCurrentProjectForGlobalLaunch())
+newWorkstreamButton.addEventListener('click', () => openNewWorkstreamDraft())
+refineButton.addEventListener('click', () => void runRefine())
+newShellButton.addEventListener('click', () => void createTerminal('shell'))
+newClaudeButton.addEventListener('click', () => void activateOrCreateAgentTerminal('claude'))
+newCodexButton.addEventListener('click', () => void activateOrCreateAgentTerminal('codex'))
+terminalCloseButton.addEventListener('click', () => void closeActiveTerminal())
+terminalHost.addEventListener('pointerdown', () => {
+  const view = activeTerminalId ? terminalViews.get(activeTerminalId) : undefined
+  view?.terminal.focus()
+})
+workstreamDigest.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element) || !currentDetail) return
+  const row = target.closest<HTMLElement>('.workstream-digest-row[data-terminal-id]')
+  if (!row || !workstreamDigest.contains(row)) return
+  void jumpToNeedsInputTerminal(currentDetail.project.id, row.dataset.terminalId)
+})
+workstreamDigest.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' && event.key !== ' ') return
+  const target = event.target
+  if (!(target instanceof Element) || !currentDetail) return
+  const row = target.closest<HTMLElement>('.workstream-digest-row[data-terminal-id]')
+  if (!row || !workstreamDigest.contains(row)) return
+  event.preventDefault()
+  void jumpToNeedsInputTerminal(currentDetail.project.id, row.dataset.terminalId)
+})
+terminalCopyContextButton.addEventListener('click', () => void copyResumeContext(terminalCopyContextButton))
+headerCopyContextButton.addEventListener('click', () => void copyResumeContext(headerCopyContextButton))
+terminalPasteContextButton.addEventListener('click', () => void pasteResumeContextIntoActiveTerminal())
+terminalCopyLogButton.addEventListener('click', () => void copyActiveTerminalLog())
+renameWorkstreamButton.addEventListener('click', () => startInlineRename())
+renameSaveButton.addEventListener('click', () => void saveWorkstreamName())
+renameCancelButton.addEventListener('click', () => cancelInlineRename())
+archiveWorkstreamButton.addEventListener('click', () => void toggleWorkstreamArchive())
+terminalFocusButton.addEventListener('click', () => toggleTerminalFocus())
+statusNoteInput.addEventListener('change', saveCurrentStatusNote)
+statusNoteInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    saveCurrentStatusNote()
+    statusNoteInput.blur()
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    statusNoteInput.value = currentDetail ? workstreamStatusNote(currentDetail.project.id) : ''
+    statusNoteInput.blur()
+  }
+})
+renameInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    void saveWorkstreamName()
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    cancelInlineRename()
+  }
+})
+transcriptButton.addEventListener('click', () => void openWorkstreamTranscript())
+transcriptSearch.addEventListener('input', renderTranscriptDialog)
+copyTranscriptButton.addEventListener('click', () => void copyTranscript())
+suggestTitleButton.addEventListener('click', () => void runSuggestTitle())
+settingsToggle.addEventListener('click', () => {
+  renderSettingsControls()
+  settingsDialog.showModal()
+})
+sessionOrderOldestInput.addEventListener('change', () => {
+  if (sessionOrderOldestInput.checked) setSessionOrder('oldest-first')
+})
+sessionOrderNewestInput.addEventListener('change', () => {
+  if (sessionOrderNewestInput.checked) setSessionOrder('newest-first')
+})
+contextClaudeToCodexInput.addEventListener('change', () => {
+  setContextSharing({ claudeToCodex: contextClaudeToCodexInput.checked })
+})
+contextCodexToClaudeInput.addEventListener('change', () => {
+  setContextSharing({ codexToClaude: contextCodexToClaudeInput.checked })
+})
+timelineOrderButton.addEventListener('click', () => {
+  setSessionOrder(sessionOrder === 'oldest-first' ? 'newest-first' : 'oldest-first')
+})
+debugToggle.addEventListener('click', () => {
+  void loadDebugState()
+  debugDialog.showModal()
+})
+debugRescanButton.addEventListener('click', () => void rescan())
+window.addEventListener('resize', () => scheduleTerminalFit())
+if ('ResizeObserver' in window) {
+  terminalResizeObserver = new ResizeObserver(() => scheduleTerminalFit())
+  terminalResizeObserver.observe(terminalCard)
+  terminalResizeObserver.observe(terminalHost)
+}
+
+setupTerminalEvents()
+void loadExistingTerminals()
+updateGlobalLaunchControls()
+
+async function boot() {
+  if (await waitForSidecar()) {
+    void checkHealth()
+    await loadAllProjects()
+  } else {
+    renderEmpty(projectsList, 'Sidecar is not reachable yet. Click Reload after it starts.')
+  }
+}
+
+void boot()
+window.setInterval(() => void checkHealth(), 3000)
