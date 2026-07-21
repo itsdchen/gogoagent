@@ -11,10 +11,10 @@ work, and leave it accurate when it hands off. Keep it short and never include
 tokens, private transcript contents, personal paths, or customer data.
 
 - Agent: Codex (current session)
-- Task: Finish friend-friendly repository onboarding for the launcher/naming UX pass and commit the reviewed change set.
+- Task: Include realistic, privacy-safe product screenshots in the repository README.
 - Started: 2026-07-21
-- Status / next step: Launcher/naming UX and friend-facing onboarding are complete and ready to commit.
-- Last verification: Full typecheck/build, clean-start smoke (including naming provenance), launcher-port smoke, start.sh --check, and git diff checks passed. Linux Electron sandbox helper still warns when not root-owned mode 4755.
+- Status / next step: Realistic privacy-safe screenshots are embedded in the README and approved; commit the complete screenshot workflow.
+- Last verification: Full typecheck/build and script syntax checks passed. The isolated capture reached `needsInput`, produced two inspected 1440x960 PNGs, exposed only compact synthetic paths, passed personal/legacy-fixture path scans, and `git diff --check` passed.
 
 ## Product
 

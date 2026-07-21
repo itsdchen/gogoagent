@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import * as pty from 'node-pty'
+import { compactHomePath } from './utils.js'
 
 export type TerminalKind = 'shell' | 'claude' | 'codex'
 type TerminalStatus = 'running' | 'exited'
@@ -206,7 +207,7 @@ function terminalLogHeader(record: TerminalSessionRecord) {
     '\x1b[90mgogoagent terminal log\x1b[0m\r\n',
     `title: ${record.title}\r\n`,
     `kind: ${record.kind}\r\n`,
-    `cwd: ${record.cwd}\r\n`,
+    `cwd: ${compactHomePath(record.cwd, os.homedir())}\r\n`,
     `command: ${record.command}\r\n`,
     `started: ${record.startedAt}\r\n`,
     '\r\n',

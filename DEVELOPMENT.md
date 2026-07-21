@@ -41,6 +41,20 @@ corepack pnpm --filter @gogoagent/sidecar build   # just sidecar
 corepack pnpm test:launcher-port  # confirm occupied ports fail explicitly
 ```
 
+## Privacy-safe README screenshots
+
+```bash
+corepack pnpm screenshots:demo
+```
+
+This builds the app and captures `docs/screenshots/overview.png` and
+`docs/screenshots/launcher.png` from an isolated temporary home containing
+only synthetic repositories and transcripts. A fake local `claude` executable
+waits at a fictional choice prompt so the capture includes the real terminal
+attention state without invoking Claude or using an account. The script does
+not read the current user's Claude history or gogoagent state. Inspect both
+images before committing them after any UI change.
+
 ## Sidecar endpoints
 
 The sidecar binds to `127.0.0.1:43111` (loopback-only). Poke it directly:

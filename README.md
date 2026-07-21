@@ -75,6 +75,30 @@ On first launch:
 Generated and manually edited workstream names are identified in the UI.
 Manual names are never overwritten by automatic naming.
 
+## Screenshots
+
+These images are captured from a generated demo home containing fictional
+repositories and transcripts. They do not contain the maintainer's real
+Claude history, paths, workstreams, terminal output, or gogoagent state.
+The overview deliberately runs a fake local `claude` executable that waits at
+a synthetic choice prompt, exercising the real terminal and attention
+indicator without invoking Claude or using an account.
+
+![Synthetic gogoagent workstream overview](./docs/screenshots/overview.png)
+
+![Synthetic new-workstream launcher with recent directories](./docs/screenshots/launcher.png)
+
+Regenerate both images with:
+
+```bash
+corepack pnpm screenshots:demo
+```
+
+The capture script builds the app, creates a temporary `HOME`, starts an
+isolated sidecar on a temporary port, captures the real Electron UI, and then
+removes the demo data. Review the resulting images before publishing them,
+especially after changing which parts of the UI are visible.
+
 ## What gogoagent does
 
 - Discovers local Claude Code sessions and transcripts.

@@ -489,7 +489,12 @@ function fmtRelative(iso?: string): string {
 }
 
 function compactPath(value: string): string {
-  return value.replace(/^\/home\/[^/]+(?=\/|$)/, '~')
+  const home = window.gogoagent.system.homeDirectory.replace(/[\\/]+$/, '')
+  if (value === home) return '~'
+  if (home && (value.startsWith(`${home}/`) || value.startsWith(`${home}\\`))) {
+    return `~${value.slice(home.length)}`
+  }
+  return value.replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, '~')
 }
 
 function fmtDateRange(firstIso: string, lastIso: string): string {
@@ -1535,7 +1540,7 @@ function renderTerminalStatus() {
     : view.record.logPath
       ? ` · log ${fmtBytes(view.record.logBytes)}`
       : ''
-  terminalStatus.textContent = `${view.record.status} · ${view.record.cwd}${logHint}${pasteHint}`
+  terminalStatus.textContent = `${view.record.status} · ${compactPath(view.record.cwd)}${logHint}${pasteHint}`
   terminalCopyContextButton.disabled = !currentDetail
   terminalPasteContextButton.disabled = !currentDetail || view.record.status !== 'running' || view.record.kind === 'shell'
   terminalCopyLogButton.disabled = !view.record.logPath || view.record.logBytes === 0
@@ -1719,7 +1724,7 @@ function renderDirectorySuggestions() {
         aria-selected="${index === state.index ? 'true' : 'false'}"
         data-directory-index="${index}"
         title="${esc(completion)}"
-      >${esc(completion)}</button>
+      >${esc(compactPath(completion))}</button>
     `),
   ].join('')
   globalCwdSuggestions.classList.remove('hidden')
@@ -2690,7 +2695,7 @@ function renderTimelineSession(detail: SessionDetail, index: number) {
             </div>
           </div>
           <p class="meta">${fmtDateRange(detail.session.startedAt, detail.session.updatedAt)} · ${detail.session.messageCount} msgs · ${detail.session.toolCallCount} tools · ${fmtNumber(detail.session.tokenCount)} tokens</p>
-          <p class="meta mono">${esc(detail.session.cwd)}</p>
+          <p class="meta mono" title="${esc(detail.session.cwd)}">${esc(compactPath(detail.session.cwd))}</p>
           ${renderCandidatePills(sessionCandidates)}
           ${renderSessionEvidence(detail.artifacts)}
         </div>
@@ -2755,7 +2760,7 @@ function renderTimelineSessionPlaceholder(session: SessionRecord, index: number)
             </div>
           </div>
           <p class="meta">${fmtDateRange(session.startedAt, session.updatedAt)} · ${collapsed ? `${session.messageCount} messages hidden; expand to load.` : 'loading when visible...'}</p>
-          <p class="meta mono">${esc(session.cwd)}</p>
+          <p class="meta mono" title="${esc(session.cwd)}">${esc(compactPath(session.cwd))}</p>
         </div>
       </article>
     </section>
@@ -2775,7 +2780,7 @@ function renderTimelineSessionError(session: SessionRecord, index: number, error
             </div>
           </div>
           <p class="meta">Timeline failed to load: ${esc((error as Error).message)}</p>
-          <p class="meta mono">${esc(session.cwd)}</p>
+          <p class="meta mono" title="${esc(session.cwd)}">${esc(compactPath(session.cwd))}</p>
         </div>
       </article>
     </section>
@@ -2957,7 +2962,7 @@ function renderTouchedPaths(paths: WorkLocationRecord[]) {
         ].filter(Boolean)
         return `
         <div class="compact-item">
-          <h3>${esc(loc.path)}</h3>
+          <h3 title="${esc(loc.path)}">${esc(compactPath(loc.path))}</h3>
           <p class="meta">
             <span class="evidence-chip evidence-${esc(loc.evidence)}">${esc(loc.evidence)}</span>
             · ${pieces.map(esc).join(' · ')}
@@ -2993,7 +2998,7 @@ function renderSessions(sessions: SessionRecord[]) {
             <button class="small-button session-transcript-button" type="button" data-session-id="${esc(s.id)}" title="Open the full transcript for this session.">${buttonContent('book-open', 'Transcript')}</button>
           </div>
           <p class="meta">${fmtRelative(s.updatedAt)} · ${s.messageCount} msgs · ${s.toolCallCount} tools · ${fmtNumber(s.tokenCount)} tokens${lessonBadge}</p>
-          <p class="meta mono">${esc(s.transcriptPath)}</p>
+          <p class="meta mono" title="${esc(s.transcriptPath)}">${esc(compactPath(s.transcriptPath))}</p>
         </div>
       `
     })

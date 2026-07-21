@@ -259,6 +259,9 @@ function ensureTerminalEvents() {
 }
 
 contextBridge.exposeInMainWorld('gogoagent', {
+  system: {
+    homeDirectory: os.homedir(),
+  },
   getHealth,
   getSnapshot,
   searchMessages,

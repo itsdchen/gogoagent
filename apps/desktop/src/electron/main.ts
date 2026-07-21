@@ -1,4 +1,5 @@
 import { BrowserWindow, Menu, app, dialog, ipcMain, type Event as ElectronEvent, type Input } from 'electron'
+import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -10,6 +11,14 @@ const MAX_ZOOM_LEVEL = 4
 const ZOOM_LEVEL_STEP = 0.5
 let appZoomLevel = 0
 const SELECT_DIRECTORY_CHANNEL = 'gogoagent:select-directory'
+const screenshotDirectory = process.env.GOGOAGENT_CAPTURE_SCREENSHOTS_DIR?.trim()
+
+if (screenshotDirectory) {
+  app.commandLine.appendSwitch('force-device-scale-factor', '1')
+  if (process.platform === 'linux' && process.env.GOGOAGENT_CAPTURE_NO_SANDBOX === '1') {
+    app.commandLine.appendSwitch('no-sandbox')
+  }
+}
 
 ipcMain.handle(SELECT_DIRECTORY_CHANNEL, async (event, defaultPath?: unknown) => {
   const window = BrowserWindow.fromWebContents(event.sender)
@@ -52,10 +61,73 @@ function handleZoomShortcut(window: BrowserWindow, event: ElectronEvent, input: 
   }
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function waitForRenderer(window: BrowserWindow, expression: string, timeoutMs = 20_000) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    const ready = await window.webContents.executeJavaScript(`Boolean(${expression})`)
+    if (ready) return
+    await delay(100)
+  }
+  throw new Error(`Timed out waiting for screenshot state: ${expression}`)
+}
+
+async function captureDemoScreenshots(window: BrowserWindow) {
+  if (!screenshotDirectory) return
+  await mkdir(screenshotDirectory, { recursive: true })
+  await waitForRenderer(window, `document.querySelectorAll('.project-card').length >= 3`)
+  if (process.env.GOGOAGENT_CAPTURE_EXPECT_INPUT === '1') {
+    await waitForRenderer(window, `Boolean(document.querySelector('.project-input-indicator'))`)
+  }
+  await window.webContents.executeJavaScript(`document.querySelector('.project-card')?.click()`)
+  await waitForRenderer(window, `
+    !document.querySelector('#project-detail')?.classList.contains('hidden') &&
+    Boolean(document.querySelector('.timeline-session:not(.timeline-loading)'))
+  `)
+  if (process.env.GOGOAGENT_CAPTURE_EXPECT_INPUT === '1') {
+    await waitForRenderer(window, `
+      Array.from(document.querySelectorAll('.terminal-tab small'))
+        .some((element) => element.textContent?.includes('needs input')) &&
+      Boolean(document.querySelector('#terminal-host:not(.hidden) .xterm-rows'))
+    `)
+  }
+  await delay(450)
+
+  const overview = await window.webContents.capturePage()
+  await writeFile(path.join(screenshotDirectory, 'overview.png'), overview.toPNG())
+
+  const recentDirectories = (() => {
+    try {
+      const parsed = JSON.parse(process.env.GOGOAGENT_CAPTURE_RECENT_DIRECTORIES ?? '[]') as unknown
+      return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : []
+    } catch {
+      return []
+    }
+  })()
+  await window.webContents.executeJavaScript(`
+    localStorage.setItem('gogoagent.recentCwds.v1', ${JSON.stringify(JSON.stringify(recentDirectories))});
+    const input = document.querySelector('#global-cwd-input');
+    if (input instanceof HTMLInputElement) {
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+    }
+  `)
+  await waitForRenderer(window, `!document.querySelector('#global-cwd-suggestions')?.classList.contains('hidden')`)
+  await delay(250)
+
+  const launcher = await window.webContents.capturePage()
+  await writeFile(path.join(screenshotDirectory, 'launcher.png'), launcher.toPNG())
+  app.quit()
+}
+
 function createWindow() {
   const window = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: screenshotDirectory ? 1440 : 1200,
+    height: screenshotDirectory ? 960 : 800,
     minWidth: 960,
     minHeight: 640,
     backgroundColor: '#0b1020',
@@ -74,6 +146,14 @@ function createWindow() {
   window.webContents.on('before-input-event', (event, input) => {
     handleZoomShortcut(window, event, input)
   })
+  if (screenshotDirectory) {
+    window.webContents.once('did-finish-load', () => {
+      void captureDemoScreenshots(window).catch((error) => {
+        console.error(`[gogoagent/screenshots] ${error instanceof Error ? error.message : String(error)}`)
+        app.exit(1)
+      })
+    })
+  }
 
   window.loadFile(path.join(__dirname, '../renderer/index.html'))
 }

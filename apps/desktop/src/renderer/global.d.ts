@@ -60,6 +60,9 @@ declare global {
       FitAddon: new () => FitAddonInstance
     }
     gogoagent: {
+      system: {
+        homeDirectory: string
+      }
       getHealth: () => Promise<import('@gogoagent/shared').HealthResponse>
       getSnapshot: () => Promise<import('@gogoagent/shared').SidecarSnapshot>
       searchMessages: (

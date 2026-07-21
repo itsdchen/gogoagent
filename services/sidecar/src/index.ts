@@ -45,7 +45,7 @@ import {
   putCachedTranscript,
   stampTranscript,
 } from './lib/transcriptParseCache.js'
-import { clampTitle, stableId } from './lib/utils.js'
+import { clampTitle, compactHomePath, stableId } from './lib/utils.js'
 import { applyArchivedWorkstreamState, archiveWorkstream, restoreWorkstream } from './lib/workstreamArchive.js'
 import { getWorkstreamLabelJob, startWorkstreamLabelJob } from './lib/workstreamLabelJobs.js'
 import {
@@ -845,7 +845,7 @@ const server = http.createServer(async (req, res) => {
         }
         const terminal = createTerminal(input)
         snapshotCache = null
-        recordActivity(`Started ${terminalKindLabel(terminal.kind)} terminal in ${terminal.cwd}`)
+        recordActivity(`Started ${terminalKindLabel(terminal.kind)} terminal in ${compactHomePath(terminal.cwd, os.homedir())}`)
         res.writeHead(201, { 'content-type': 'application/json' })
         res.end(JSON.stringify(terminal))
       } catch (error) {

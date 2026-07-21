@@ -8,6 +8,7 @@
     "build": "corepack pnpm -r build",
     "dev": "corepack pnpm --filter @gogoagent/desktop dev",
     "lint": "corepack pnpm -r lint",
+    "screenshots:demo": "node scripts/capture-demo-screenshots.mjs",
     "test:clean-start": "corepack pnpm --filter @gogoagent/shared build && corepack pnpm --filter @gogoagent/sidecar build && node scripts/clean-start-smoke.mjs",
     "test:launcher-port": "node scripts/launcher-port-smoke.mjs",
     "typecheck": "corepack pnpm --filter @gogoagent/shared build && corepack pnpm --filter @gogoagent/shared typecheck && corepack pnpm --filter @gogoagent/sidecar typecheck && corepack pnpm --filter @gogoagent/desktop typecheck"

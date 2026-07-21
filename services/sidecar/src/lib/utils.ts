@@ -1,5 +1,15 @@
 import { createHash } from 'node:crypto'
 
+export function compactHomePath(value: string, home: string) {
+  const normalizedHome = home.replace(/[\\/]+$/, '')
+  if (!normalizedHome) return value
+  if (value === normalizedHome) return '~'
+  if (value.startsWith(`${normalizedHome}/`) || value.startsWith(`${normalizedHome}\\`)) {
+    return `~${value.slice(normalizedHome.length)}`
+  }
+  return value
+}
+
 export function stableId(prefix: string, value: string) {
   const hash = createHash('sha1').update(value).digest('hex').slice(0, 12)
   return `${prefix}-${hash}`
