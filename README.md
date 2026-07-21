@@ -1,56 +1,60 @@
 # gogoagent
 
-AI coding work gets scattered across terminal windows and past conversations.
-It becomes difficult to remember what each session was doing—or notice when an
-agent is waiting for input.
-
-gogoagent is a local-first desktop console that groups Claude Code history and
-live Claude, Codex, or shell terminals into workstreams, preserves their
-context, and highlights work that needs attention. A workstream is the related
-sessions and terminals for one repository and branch.
+gogoagent helps you run and organize Claude Code and Codex workflows, see
+which agents need input, share useful memories between them, and pick up old
+workstreams where you left off.
 
 ![gogoagent showing a Claude terminal waiting for input](./docs/screenshots/overview.png)
 
-*This screenshot uses generated repositories, transcripts, and terminal
-output. See the [safe capture workflow](./docs/screenshots/README.md).*
+*Shown with generated repositories, transcripts, and terminal output. See the
+[safe capture workflow](./docs/screenshots/README.md).*
 
-> **Project status:** gogoagent currently runs from source; there is no
-> packaged installer yet. Linux is the primary development platform. macOS
-> support is intended but has not yet received the same level of testing.
+## Why it helps
+
+- **Too many conversations to keep straight.** gogoagent groups sessions and
+  terminals for the same repo and branch into one workstream, with its history,
+  touched paths, and terminal logs in one place.
+- **An agent is waiting in a buried terminal.** A yellow `>` marks the
+  workstream that needs input and jumps straight to it.
+- **Switching agents means explaining everything again.** gogoagent can carry
+  Claude Code memories into Codex, or Codex instructions back into Claude
+  Code. It pastes a short handoff into the new terminal for you to review
+  before sending instead of dumping the whole transcript.
+- **Old work is hard to restart.** Return to the workstream, resume its latest
+  Claude conversation when possible, or start Codex with the relevant context.
+- **The work list gets noisy.** Search, rename, pin, and archive workstreams as
+  priorities change.
+
+> **Project status:** gogoagent runs from source; there is no installer yet.
+> Most development happens on Linux. macOS should work but has had less
+> testing.
 
 ## Quick start
 
-### Prerequisites
+You need:
 
-Required:
+- macOS or Linux with Git and Bash
+- Node.js 20 or newer
+- Corepack
 
-- macOS or Linux with Git and Bash;
-- Node.js 20 or newer; and
-- Corepack.
+The `claude` and `codex` CLIs are optional. Install either one if you want
+gogoagent to launch it. Codex is also used for optional naming and lesson
+extraction.
 
-Optional:
-
-- the `claude` CLI to launch Claude Code;
-- the `codex` CLI to launch Codex, improve names, or refine lessons.
-
-Confirm the required runtime:
+Check your setup:
 
 ```bash
 node --version
 corepack --version
 ```
 
-If Node is installed but Corepack is missing:
+If Node is installed but Corepack is not:
 
 ```bash
 npm install --global corepack@latest
 ```
 
-If a native dependency must compile, macOS may require Xcode Command Line
-Tools (`xcode-select --install`); Linux may require Python and the
-distribution's standard C/C++ build tools.
-
-### Install and launch
+Then clone and launch:
 
 ```bash
 git clone https://github.com/itsdchen/gogoagent.git
@@ -58,93 +62,93 @@ cd gogoagent
 ./start.sh
 ```
 
-`./start.sh` installs missing dependencies, repairs Electron or `node-pty`
-when necessary, builds the app, safely starts or reuses its local sidecar, and
-opens Electron. The first run needs network access and may take a few minutes.
+`./start.sh` installs missing packages, repairs Electron or `node-pty` when
+needed, builds the app, starts or reuses the local sidecar, and opens Electron.
+The first run needs network access and may take a few minutes.
 
-To prepare and verify the installation without opening the app:
+To check everything without opening the app:
 
 ```bash
 ./start.sh --check
 ```
 
-### Start working
+If `node-pty` has to build from source, macOS may need Xcode Command Line Tools
+(`xcode-select --install`); Linux may need Python and standard C/C++ build
+tools.
 
-- Existing Claude Code history under `~/.claude` appears automatically.
-- An empty list is normal if there is no Claude history yet.
-- To start fresh, choose a directory, select **Claude**, **Codex**, or
-  **Shell**, and press the Start button.
-- A yellow `>` marks a live terminal that appears to be waiting for input;
-  select it to jump to that terminal.
+Existing Claude Code history under `~/.claude` appears on first launch. An
+empty list is normal if there is no history yet. To start new work, choose a
+directory, select **Claude**, **Codex**, or **Shell**, and press Start.
+
+Memory sharing between Claude Code and Codex is on by default; either direction
+can be turned off in Settings.
 
 ![gogoagent new-workstream launcher](./docs/screenshots/launcher.png)
 
-## What it helps with
+## What stays local
 
-- Recover the intent and history behind work spread across several sessions.
-- Keep live agent terminals attached to the work they belong to.
-- See when Claude or Codex appears to be waiting for approval or input.
-- Review timelines, transcript excerpts, touched paths, and terminal logs.
-- Search, pin, archive, rename, and label workstreams.
-- Copy focused context when continuing work or handing it to another agent.
+Coding transcripts and terminal logs can contain private code and sensitive
+output. gogoagent keeps discovery, indexing, storage, terminal management, and
+cross-agent memory handoffs on your machine.
 
-gogoagent is an operations console for local AI coding work—not a hosted team
-workspace or general task manager.
+The sidecar listens only on `127.0.0.1` and protects every route except its
+health check with a per-run token that renderer code cannot access. gogoagent
+does not intentionally read Claude credentials or authentication files.
 
-## Privacy and local data
+Two optional actions use your installed Codex CLI and may contact its
+configured model provider:
 
-Discovery, indexing, storage, and terminal management run locally. gogoagent
-reads local Claude Code artifacts such as:
+- **Improve names** sends selected repo and branch names, clipped user or
+  terminal messages, and touched paths.
+- **Extract lessons** sends candidate lesson text and nearby conversation
+  context.
+
+Neither action is needed for discovery or terminal management, and automatic
+naming is off by default. Memory sharing is different: the handoff is built
+locally, and nothing is sent until you review it in the new terminal.
+
+<details>
+<summary>Files gogoagent reads and writes</summary>
+
+It reads Claude Code history from:
 
 - `~/.claude/projects/**/*.jsonl`
 - `~/.claude/history.jsonl`
 - `~/.claude/sessions/*.json`
 - `~/.claude/todos/*.json`
 
-It does not intentionally read Claude credentials or authentication material.
-The sidecar listens only on `127.0.0.1` and protects every route except its
-health check with a per-run token that is not exposed to renderer code.
+It stores its own data under:
 
-Optional model-powered actions have a different boundary:
+- `~/.gogoagent/terminal-logs/` — terminal metadata and output
+- `~/.gogoagent/cache/` — regenerable transcript indexes
+- `~/.gogoagent/state/` — names, archives, and refined lessons
+- `~/.cache/gogoagent/` — older data retained for migration
 
-- **Improve names** invokes the installed Codex CLI with selected context such
-  as repository and branch names, clipped user or terminal messages, and
-  touched paths.
-- Lesson refinement invokes the installed Codex CLI with candidate lesson text
-  and nearby conversation context.
+Terminal logs can contain commands and output from embedded terminals, so
+treat `~/.gogoagent` as private. On first use, older saved state in
+`~/.cache/gogoagent` is copied into `~/.gogoagent/state`; the original files
+are left alone.
 
-Those actions may contact the model provider configured for the Codex CLI.
-They are not required for discovery or terminal management, and automatic
-naming is off by default.
+</details>
 
-gogoagent writes its own data under:
+## How terminals stay alive
 
-- `~/.gogoagent/terminal-logs/` — terminal metadata and output;
-- `~/.gogoagent/cache/` — regenerable transcript indexes;
-- `~/.gogoagent/state/` — names, archives, and refined lessons;
-- `~/.cache/gogoagent/` — legacy data retained for migration.
+Closing the window should not kill long-running work. gogoagent keeps live
+terminals in a small local background process called the sidecar. Closing
+Electron may leave that process running so the terminals survive a window
+restart; pressing Ctrl+C stops Electron and any sidecar started by that
+launcher. A sidecar reused from an earlier run stays alive.
 
-Terminal logs can contain commands and output from embedded terminals; treat
-`~/.gogoagent` as private. Older durable state under `~/.cache/gogoagent` is
-copied into `~/.gogoagent/state` on first use without deleting the original.
+`./start.sh` reuses a healthy sidecar at `http://127.0.0.1:43111` instead of
+switching ports and making its terminals look like they disappeared.
 
-## Startup and terminal lifecycle
-
-The sidecar owns live PTYs and listens on `http://127.0.0.1:43111` by default.
-`./start.sh` reuses a healthy sidecar on that port instead of silently moving
-to another port and hiding its terminals.
-
-Closing Electron may leave the sidecar running so terminals survive a window
-restart. Pressing Ctrl+C in the terminal that launched gogoagent stops Electron
-and any sidecar started by that command.
-
-Restart only the frontend while retaining a healthy sidecar:
+Restart only the window while keeping the sidecar:
 
 ```bash
 ./start.sh --frontend
 ```
 
-Run an intentionally separate instance on another port:
+Run a separate copy on another port:
 
 ```bash
 GOGOAGENT_PORT=43112 ./start.sh
@@ -158,8 +162,8 @@ Start with:
 ./start.sh --check
 ```
 
-See [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) for Corepack, native dependency,
-Electron sandbox, occupied-port, missing-workstream, and agent CLI guidance.
+See [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) for common setup and recovery
+problems.
 
 ## Development
 
@@ -169,8 +173,7 @@ coding agents should also read [AGENTS.md](./AGENTS.md).
 
 ## Current limitations
 
-- Installation still requires a source checkout and Node.js toolchain.
-- Discovery currently focuses on local Claude Code artifacts and gogoagent's
-  own terminal logs.
+- Discovery starts with local Claude Code history. Codex work appears when it
+  is launched or logged through gogoagent.
 - Worktree and touched-path inference remain heuristic in some cases.
 - There is no durable manual merge or relate workflow yet.

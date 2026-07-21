@@ -11,10 +11,10 @@ work, and leave it accurate when it hands off. Keep it short and never include
 tokens, private transcript contents, personal paths, or customer data.
 
 - Agent: Codex (current session)
-- Task: Make the public README and setup documentation concise, problem-first, and accurate.
+- Task: Rewrite the README around concrete user pain, obvious value, and non-repetitive language.
 - Started: 2026-07-21
-- Status / next step: Problem-first README, cross-platform troubleshooting, accurate Codex privacy wording, and clearer startup errors are complete; ready for review and commit.
-- Last verification: `./start.sh --check` passes with the documented Linux sandbox warning. Shell/JavaScript syntax, relative documentation links, and `git diff --check` pass; the preceding `>` screenshots passed a full isolated capture/build and privacy inspection.
+- Status / next step: README now uses the user's concise opening and pain-to-value framing throughout; ready for review and commit.
+- Last verification: All README-relative links resolve and `git diff --check` passes. The change is documentation-only and leaves the previously verified build and screenshots unchanged.
 
 ## Product
 
