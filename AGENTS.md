@@ -11,10 +11,10 @@ work, and leave it accurate when it hands off. Keep it short and never include
 tokens, private transcript contents, personal paths, or customer data.
 
 - Agent: Codex (current session)
-- Task: Merge the README value-proposition pass with the latest macOS startup improvements from main.
+- Task: Add a temporary license notice for the public preview.
 - Started: 2026-07-21
-- Status / next step: README refinement and macOS startup work are combined and verified; complete the merge commit.
-- Last verification: On Linux, `bash -n start.sh`, `./start.sh --check`, full typecheck, and the desktop build pass; the check reports the expected Electron sandbox ownership warning. The incoming startup change was also verified on macOS arm64 with Node 26.5.0, including a source-built `node-pty` spawning `/bin/zsh`.
+- Status / next step: The public-preview license notice is complete; commit and push the current branch.
+- Last verification: Documentation-only change; `git diff --check` passes.
 
 ## Product
 

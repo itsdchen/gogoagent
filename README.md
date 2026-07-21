@@ -175,3 +175,6 @@ coding agents should also read [AGENTS.md](./AGENTS.md).
   work launched or logged through gogoagent.
 - Worktree detection and touched-file lists are best-effort and can be wrong.
 - You cannot manually merge or link workstreams yet.
+
+> **Preview:** gogoagent has not been released under an open-source license
+> yet. Please don't redistribute it or use it commercially without permission.
