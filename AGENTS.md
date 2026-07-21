@@ -11,10 +11,10 @@ work, and leave it accurate when it hands off. Keep it short and never include
 tokens, private transcript contents, personal paths, or customer data.
 
 - Agent: Codex (current session)
-- Task: Rewrite the README around concrete user pain, obvious value, and non-repetitive language.
+- Task: Merge the README value-proposition pass with the latest macOS startup improvements from main.
 - Started: 2026-07-21
-- Status / next step: README tone is natural throughout, including privacy, terminal persistence, and limitations; ready for review and commit.
-- Last verification: `git diff --check` passes. The change remains documentation-only and leaves the previously verified links, build, and screenshots unchanged.
+- Status / next step: README refinement and macOS startup work are combined and verified; complete the merge commit.
+- Last verification: On Linux, `bash -n start.sh`, `./start.sh --check`, full typecheck, and the desktop build pass; the check reports the expected Electron sandbox ownership warning. The incoming startup change was also verified on macOS arm64 with Node 26.5.0, including a source-built `node-pty` spawning `/bin/zsh`.
 
 ## Product
 

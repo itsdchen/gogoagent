@@ -45,7 +45,8 @@ node --version
 corepack --version
 ```
 
-If Node is installed but Corepack is not:
+If Node is installed but Corepack is not, `./start.sh` offers to install it
+with npm after asking for permission. To install it yourself instead:
 
 ```bash
 npm install --global corepack@latest

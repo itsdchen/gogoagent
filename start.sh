@@ -44,8 +44,33 @@ require_node() {
 }
 
 require_pnpm() {
+  if ! command -v corepack >/dev/null 2>&1; then
+    if [[ -t 0 && -t 1 ]]; then
+      command -v npm >/dev/null 2>&1 \
+        || fail "Corepack is required to run pnpm, and npm is not available to install it. Install Corepack, then rerun ./start.sh."
+
+      printf 'gogoagent uses Corepack to run pnpm, but Corepack is not installed.\n'
+      printf 'Install it now with npm install --global corepack@latest? [y/N] '
+      local answer
+      read -r answer
+      case "$answer" in
+        y|Y|yes|YES|Yes)
+          info "Installing Corepack with npm..."
+          npm install --global corepack@latest \
+            || fail "Corepack installation failed. Correct the error above, then rerun ./start.sh."
+          hash -r
+          ;;
+        *)
+          fail "Corepack is required to run pnpm. Install it with: npm install --global corepack@latest"
+          ;;
+      esac
+    else
+      fail "Corepack is required to run pnpm. Install it with: npm install --global corepack@latest"
+    fi
+  fi
+
   command -v corepack >/dev/null 2>&1 \
-    || fail "Corepack is required to run pnpm. Install it with: npm install --global corepack@latest"
+    || fail "Corepack was installed, but it is not on PATH. Open a new terminal and rerun ./start.sh."
   corepack pnpm --version >/dev/null 2>&1 \
     || fail "Corepack could not run pnpm. Try: corepack enable && corepack pnpm install"
 }
@@ -84,16 +109,34 @@ require_node_pty_binary() {
   arch="$(node -p 'process.arch')"
 
   if [[ -f "$pty_dir/build/Release/pty.node" || -f "$pty_dir/build/Debug/pty.node" || -f "$pty_dir/prebuilds/${platform}-${arch}/pty.node" ]]; then
-    return
+    if node -e '
+      const { createRequire } = require("node:module")
+      const path = require("node:path")
+      const pty = createRequire(path.join(process.cwd(), "services/sidecar/package.json"))("node-pty")
+      const child = pty.spawn(process.env.SHELL || "/bin/bash", ["-lc", "exit 0"], {
+        name: "xterm-256color", cwd: process.cwd(), cols: 80, rows: 24, env: process.env,
+      })
+      child.onExit(({ exitCode }) => process.exit(exitCode))
+    ' >/dev/null 2>&1; then
+      return
+    fi
+    warn "node-pty's native binary cannot start a shell on this system."
   fi
 
-  info "node-pty's native binary is missing for ${platform}-${arch}; rebuilding it now..."
-  corepack pnpm rebuild node-pty \
-    || fail "node-pty could not be built. On Linux, install your distribution's C/C++ build tools and Python, then rerun ./start.sh."
+  info "Rebuilding node-pty from source for ${platform}-${arch}..."
+  npm_config_build_from_source=true corepack pnpm --filter @gogoagent/sidecar rebuild node-pty --pending \
+    || fail "node-pty could not be built. On macOS, install Xcode Command Line Tools; on Linux, install standard C/C++ build tools and Python. Then rerun ./start.sh."
 
-  if [[ ! -f "$pty_dir/build/Release/pty.node" && ! -f "$pty_dir/build/Debug/pty.node" && ! -f "$pty_dir/prebuilds/${platform}-${arch}/pty.node" ]]; then
-    fail "node-pty finished rebuilding, but its native binary is still missing for ${platform}-${arch}."
-  fi
+  node -e '
+    const { createRequire } = require("node:module")
+    const path = require("node:path")
+    const pty = createRequire(path.join(process.cwd(), "services/sidecar/package.json"))("node-pty")
+    const child = pty.spawn(process.env.SHELL || "/bin/bash", ["-lc", "exit 0"], {
+      name: "xterm-256color", cwd: process.cwd(), cols: 80, rows: 24, env: process.env,
+    })
+    child.onExit(({ exitCode }) => process.exit(exitCode))
+  ' >/dev/null 2>&1 \
+    || fail "node-pty finished rebuilding, but it still cannot start a shell on this system."
 }
 
 electron_binary_ready() {
@@ -103,8 +146,40 @@ electron_binary_ready() {
     const path = require("node:path")
     const root = process.cwd()
     const binaryPath = createRequire(path.join(root, "apps/desktop/package.json"))("electron")
-    process.exit(fs.existsSync(binaryPath) ? 0 : 1)
+    if (!fs.existsSync(binaryPath)) process.exit(1)
+    if (process.platform === "darwin") {
+      const frameworkPath = path.resolve(path.dirname(binaryPath), "../Frameworks/Electron Framework.framework/Electron Framework")
+      if (!fs.existsSync(frameworkPath)) process.exit(1)
+    }
   ' >/dev/null 2>&1
+}
+
+repair_electron_install() {
+  local electron_dir="$1"
+  local platform_path
+
+  case "$(uname -s)" in
+    Darwin) platform_path="Electron.app/Contents/MacOS/Electron" ;;
+    Linux) platform_path="electron" ;;
+    *) return 0 ;;
+  esac
+
+  if [[ "$(uname -s)" == "Darwin" && -x "$electron_dir/dist/$platform_path" && ! -f "$electron_dir/dist/Electron.app/Contents/Frameworks/Electron Framework.framework/Electron Framework" ]]; then
+    command -v unzip >/dev/null 2>&1 \
+      || fail "Electron's app bundle is incomplete, and unzip is unavailable to repair it."
+    warn "Electron's app bundle is incomplete; extracting the verified download again."
+    local electron_zip
+    electron_zip="$(cd "$electron_dir" && node -e "require('@electron/get').downloadArtifact({ version: require('./package.json').version, artifactName: 'electron', platform: process.platform, arch: process.arch, checksums: require('./checksums.json') }).then(console.log).catch((error) => { console.error(error); process.exit(1) })")" \
+      || fail "Electron's download could not be located for repair."
+    unzip -oq "$electron_zip" -d "$electron_dir/dist" \
+      || fail "Electron's app bundle could not be extracted."
+  fi
+
+  if [[ -x "$electron_dir/dist/$platform_path" && ! -f "$electron_dir/path.txt" ]]; then
+    warn "Electron's binary was extracted, but its path marker is missing; repairing it."
+    printf '%s' "$platform_path" > "$electron_dir/path.txt" \
+      || fail "Electron's binary is present, but its path marker could not be written."
+  fi
 }
 
 require_electron_binary() {
@@ -116,16 +191,22 @@ require_electron_binary() {
     return
   fi
 
+  repair_electron_install "$electron_dir"
+  if electron_binary_ready; then
+    return
+  fi
+
   info "Electron's application binary is missing; installing it now..."
   node "$electron_dir/install.js" \
     || fail "Electron's application binary could not be installed. Check the network error above, then rerun ./start.sh."
 
+  repair_electron_install "$electron_dir"
   electron_binary_ready \
     || fail "Electron installation finished, but its application binary is still missing."
 }
 
 check_electron_sandbox() {
-  [[ "$(uname -s)" == "Linux" ]] || return
+  [[ "$(uname -s)" == "Linux" ]] || return 0
 
   local electron_dir
   electron_dir="$(node -e "const { createRequire } = require('node:module'); const path = require('node:path'); const fromDesktop = createRequire(path.join(process.cwd(), 'apps/desktop/package.json')); console.log(path.dirname(fromDesktop.resolve('electron/package.json')))" 2>/dev/null)" \
