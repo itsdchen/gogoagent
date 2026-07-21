@@ -322,8 +322,15 @@ async function loadIndexedSessions(): Promise<TranscriptParseResult[]> {
   return attachTerminalWorkstreamsToNativeTranscripts(claudeSessions, terminalSessions)
 }
 
-let scanInFlight: Promise<SidecarSnapshot> | null = null
-let snapshotCache: { snapshot: SidecarSnapshot; builtAt: number } | null = null
+interface SnapshotGeneration {
+  snapshot: SidecarSnapshot
+  sessionResults: TranscriptParseResult[]
+  sessionResultById: Map<string, TranscriptParseResult>
+  builtAt: number
+}
+
+let scanInFlight: Promise<SnapshotGeneration> | null = null
+let snapshotCache: SnapshotGeneration | null = null
 const SNAPSHOT_CACHE_MS = Number(process.env.GOGOAGENT_SNAPSHOT_CACHE_MS ?? 1000)
 
 function terminalKindLabel(kind: TerminalSessionRecord['kind']) {
@@ -408,11 +415,15 @@ addTerminalEventListener((event) => {
   }
 })
 
-async function buildSnapshot(force = false): Promise<SidecarSnapshot> {
+async function buildSnapshotGeneration(force = false, allowStale = false): Promise<SnapshotGeneration> {
   // Coalesce concurrent scans so /snapshot, /debug/rescan, etc. don't all
   // re-walk the filesystem in parallel.
-  if (!force && snapshotCache && Date.now() - snapshotCache.builtAt < SNAPSHOT_CACHE_MS) {
-    return snapshotCache.snapshot
+  if (
+    !force &&
+    snapshotCache &&
+    (allowStale || Date.now() - snapshotCache.builtAt < SNAPSHOT_CACHE_MS)
+  ) {
+    return snapshotCache
   }
   if (scanInFlight) return scanInFlight
   scanInFlight = (async () => {
@@ -455,10 +466,16 @@ async function buildSnapshot(force = false): Promise<SidecarSnapshot> {
       setCount('artifacts', snapshot.artifacts.length)
       setCount('workLocations', snapshot.workLocations.length)
       setCount('clusters', snapshot.clusters.length)
-      snapshotCache = { snapshot, builtAt: Date.now() }
+      const generation: SnapshotGeneration = {
+        snapshot,
+        sessionResults,
+        sessionResultById: new Map(sessionResults.map((result) => [result.session.id, result])),
+        builtAt: Date.now(),
+      }
+      snapshotCache = generation
       endScan(true)
       recordActivity(`Scanned ${snapshot.workstreams.length} projects, ${snapshot.sessions.length} sessions`)
-      return snapshot
+      return generation
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       endScan(false, message)
@@ -469,6 +486,10 @@ async function buildSnapshot(force = false): Promise<SidecarSnapshot> {
     }
   })()
   return scanInFlight
+}
+
+async function buildSnapshot(force = false): Promise<SidecarSnapshot> {
+  return (await buildSnapshotGeneration(force)).snapshot
 }
 
 const detailEvidenceRank: Record<ArtifactEvidence, number> = {
@@ -588,12 +609,15 @@ async function buildProjectDetail(projectId: string): Promise<ProjectDetail | nu
 }
 
 async function buildSessionDetail(sessionId: string): Promise<SessionDetail | null> {
-  const snapshot = await buildSnapshot()
+  // A project detail request establishes the generation shown by the renderer.
+  // Session details should reuse it even after the short discovery TTL expires;
+  // otherwise a large timeline multiplies the same filesystem scan per session.
+  const generation = await buildSnapshotGeneration(false, true)
+  const snapshot = generation.snapshot
   const session = snapshot.sessions.find((entry) => entry.id === sessionId)
   if (!session) return null
 
-  const sessionResults = await loadIndexedSessions()
-  const result = sessionResults.find((entry) => entry.session.id === sessionId)
+  const result = generation.sessionResultById.get(sessionId)
   if (!result) return null
 
   return {
@@ -622,11 +646,12 @@ async function searchMessages(query: string): Promise<MessageSearchResponse> {
   const normalized = query.trim()
   if (!normalized) return { query: normalized, results: [] }
 
-  const sessionResults = await loadIndexedSessions()
-  const results = sessionResults
+  const lowerQuery = normalized.toLowerCase()
+  const generation = await buildSnapshotGeneration()
+  const results = generation.sessionResults
     .flatMap((entry) =>
       entry.messages
-        .filter((message) => message.text.toLowerCase().includes(normalized.toLowerCase()))
+        .filter((message) => message.text.toLowerCase().includes(lowerQuery))
         .map((message) => ({
           sessionId: entry.session.id,
           messageId: message.id,
@@ -887,9 +912,8 @@ const server = http.createServer(async (req, res) => {
         ? (body!.projectIds as unknown[]).filter((id): id is string => typeof id === 'string')
         : undefined
       const force = Boolean(body?.force)
-      const sessionResults = await loadIndexedSessions()
-      const snapshot = await buildSnapshotModel(sessionResults)
-      await applyArchivedWorkstreamState(snapshot.workstreams)
+      const generation = await buildSnapshotGeneration()
+      const { snapshot, sessionResults } = generation
       const selected = projectIds && projectIds.length > 0
         ? snapshot.workstreams.filter((workstream) => projectIds.includes(workstream.id))
         : snapshot.workstreams.filter((workstream) => !workstream.archivedAt)
@@ -1025,9 +1049,9 @@ const server = http.createServer(async (req, res) => {
       const body = await readJsonBody(req)
       let sessionIds = Array.isArray(body?.sessionIds) ? (body!.sessionIds as string[]) : undefined
       const projectId = typeof body?.projectId === 'string' ? body.projectId : undefined
+      const generation = await buildSnapshotGeneration()
       if (projectId && !sessionIds) {
-        const snapshot = await buildSnapshot()
-        const project = snapshot.workstreams.find((p) => p.id === projectId)
+        const project = generation.snapshot.workstreams.find((p) => p.id === projectId)
         if (!project) {
           res.writeHead(404, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ error: 'Project not found' }))
@@ -1037,7 +1061,7 @@ const server = http.createServer(async (req, res) => {
       }
       const force = Boolean(body?.force)
       const dryRun = Boolean(body?.dryRun)
-      const sessionResults = await loadTranscripts()
+      const sessionResults = generation.sessionResults
       if (dryRun) {
         const preview = await dryRunRefine({ sessionResults, sessionIds, force })
         res.writeHead(200, { 'content-type': 'application/json' })
@@ -1111,14 +1135,15 @@ const server = http.createServer(async (req, res) => {
   if (suggestTitleMatch && req.method === 'POST') {
     const projectId = decodeURIComponent(suggestTitleMatch[1])
     try {
-      const snapshot = await buildSnapshot()
+      const generation = await buildSnapshotGeneration()
+      const snapshot = generation.snapshot
       const project = snapshot.workstreams.find((p) => p.id === projectId)
       if (!project) {
         res.writeHead(404, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: 'Project not found' }))
         return
       }
-      const sessionResults = await loadTranscripts()
+      const sessionResults = generation.sessionResults
       const openers: SessionOpener[] = []
       for (const id of project.sessionIds) {
         const entry = sessionResults.find((r) => r.session.id === id)

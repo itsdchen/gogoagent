@@ -109,29 +109,47 @@ function workstreamName(sessions: SessionRecord[], fallbackRepoRoot: string, bra
   return `${repo} · ${date}`
 }
 
-function workstreamStats(
-  sessionIds: string[],
+interface WorkstreamStatsIndex {
+  refinedKeptCountBySession: Map<string, number>
+  touchedPathsBySession: Map<string, Set<string>>
+}
+
+function buildWorkstreamStatsIndex(
   workLocations: WorkLocationRecord[],
   refinedKeptCountBySession: Map<string, number>,
-) {
+): WorkstreamStatsIndex {
+  const touchedPathsBySession = new Map<string, Set<string>>()
+  for (const location of workLocations) {
+    if (location.evidence !== 'touched' && location.evidence !== 'inspected') continue
+    for (const sessionId of location.sessionIds) {
+      const paths = touchedPathsBySession.get(sessionId) ?? new Set<string>()
+      paths.add(location.path)
+      touchedPathsBySession.set(sessionId, paths)
+    }
+  }
+  return { refinedKeptCountBySession, touchedPathsBySession }
+}
+
+function workstreamStats(sessionIds: string[], statsIndex: WorkstreamStatsIndex) {
   const keptLessonCount = sessionIds.reduce(
-    (sum, id) => sum + (refinedKeptCountBySession.get(id) ?? 0),
+    (sum, id) => sum + (statsIndex.refinedKeptCountBySession.get(id) ?? 0),
     0,
   )
-  const touchedPathCount = workLocations.filter(
-    (loc) =>
-      (loc.evidence === 'touched' || loc.evidence === 'inspected') &&
-      loc.sessionIds.some((id) => sessionIds.includes(id)),
-  ).length
+  const touchedPaths = new Set<string>()
+  for (const sessionId of sessionIds) {
+    for (const touchedPath of statsIndex.touchedPathsBySession.get(sessionId) ?? []) {
+      touchedPaths.add(touchedPath)
+    }
+  }
+  const touchedPathCount = touchedPaths.size
   return { keptLessonCount, touchedPathCount }
 }
 
 function applyWorkstreamStats(
   workstream: Project,
-  workLocations: WorkLocationRecord[],
-  refinedKeptCountBySession: Map<string, number>,
+  statsIndex: WorkstreamStatsIndex,
 ) {
-  const stats = workstreamStats(workstream.sessionIds, workLocations, refinedKeptCountBySession)
+  const stats = workstreamStats(workstream.sessionIds, statsIndex)
   workstream.sessionCount = workstream.sessionIds.length
   workstream.keptLessonCount = stats.keptLessonCount
   workstream.touchedPathCount = stats.touchedPathCount
@@ -142,8 +160,7 @@ function makeWorkstream(
   run: SessionRecord[],
   repoRoot: string,
   branch: string | undefined,
-  workLocations: WorkLocationRecord[],
-  refinedKeptCountBySession: Map<string, number>,
+  statsIndex: WorkstreamStatsIndex,
 ): Project {
   const first = run[0]
   const last = run.reduce(
@@ -151,7 +168,7 @@ function makeWorkstream(
     run[0],
   )
   const sessionIds = run.map((s) => s.id)
-  const stats = workstreamStats(sessionIds, workLocations, refinedKeptCountBySession)
+  const stats = workstreamStats(sessionIds, statsIndex)
 
   return {
     id,
@@ -170,13 +187,12 @@ function makeWorkstream(
 function attachSessionToWorkstream(
   workstream: Project,
   session: SessionRecord,
-  workLocations: WorkLocationRecord[],
-  refinedKeptCountBySession: Map<string, number>,
+  statsIndex: WorkstreamStatsIndex,
 ) {
   if (!workstream.sessionIds.includes(session.id)) workstream.sessionIds.push(session.id)
   if (session.startedAt.localeCompare(workstream.firstStartedAt) < 0) workstream.firstStartedAt = session.startedAt
   if (session.updatedAt.localeCompare(workstream.lastUpdatedAt) > 0) workstream.lastUpdatedAt = session.updatedAt
-  applyWorkstreamStats(workstream, workLocations, refinedKeptCountBySession)
+  applyWorkstreamStats(workstream, statsIndex)
 }
 
 export function buildWorkstreams(
@@ -185,6 +201,7 @@ export function buildWorkstreams(
   refinedKeptCountBySession: Map<string, number>,
   gapMs = DEFAULT_GAP_MS,
 ): Project[] {
+  const statsIndex = buildWorkstreamStatsIndex(workLocations, refinedKeptCountBySession)
   const hardAttachedSessions = sessions.filter((session) => session.workstreamId)
   const bucketableSessions = sessions.filter((session) => !session.workstreamId)
 
@@ -213,8 +230,7 @@ export function buildWorkstreams(
         run,
         repoRoot,
         branch,
-        workLocations,
-        refinedKeptCountBySession,
+        statsIndex,
       ))
       run = []
     }
@@ -242,7 +258,7 @@ export function buildWorkstreams(
 
     const existing = workstreamById.get(attachedId)
     if (existing) {
-      attachSessionToWorkstream(existing, session, workLocations, refinedKeptCountBySession)
+      attachSessionToWorkstream(existing, session, statsIndex)
       continue
     }
 
@@ -252,8 +268,7 @@ export function buildWorkstreams(
       [session],
       session.cwd,
       branch,
-      workLocations,
-      refinedKeptCountBySession,
+      statsIndex,
     )
     workstreams.push(fallback)
     workstreamById.set(fallback.id, fallback)

@@ -11,10 +11,10 @@ work, and leave it accurate when it hands off. Keep it short and never include
 tokens, private transcript contents, personal paths, or customer data.
 
 - Agent: Codex (current session)
-- Task: Bootstrap fresh installs, make ports explicit, migrate durable state, deduplicate naming, and stabilize terminal attention UX.
+- Task: Reduce repeated indexing and rendering work; make timelines and transcripts lazy without regressing terminal lifecycle or attention UX.
 - Started: 2026-07-20
-- Status / next step: Approved startup/state fixes plus terminal switching and input-attention improvements are complete; test the rebuilt app, then commit after review.
-- Last verification: Typecheck, desktop build, prerequisite/shell/diff checks, expanded clean-start/auth/migration/input test, and explicit-port launcher test passed.
+- Status / next step: Performance pass complete; test the rebuilt app with a large workstream, then commit after review.
+- Last verification: Typecheck, desktop/sidecar builds, startup/shell/diff checks, expanded clean-start cache/generation smoke test, and explicit-port launcher test passed.
 
 ## Product
 

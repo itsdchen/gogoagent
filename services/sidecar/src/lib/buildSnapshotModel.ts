@@ -74,10 +74,7 @@ function artifactEventTimestamps(artifact: {
   const events = [...(artifact.eventTimestamps ?? [])]
   if (artifact.firstSeenAt) events.push(artifact.firstSeenAt)
   if (artifact.lastSeenAt) events.push(artifact.lastSeenAt)
-  return events.filter((timestamp, index, all) => {
-    if (all.indexOf(timestamp) !== index) return false
-    return Number.isFinite(Date.parse(timestamp))
-  })
+  return [...new Set(events)].filter((timestamp) => Number.isFinite(Date.parse(timestamp)))
 }
 
 function earliestIso(values: string[]) {
@@ -117,14 +114,26 @@ function locationImportance(location: WorkLocationRecord) {
 }
 
 export async function buildSnapshotModel(sessionResults: TranscriptParseResult[]): Promise<SidecarSnapshot> {
-  const sessions = sessionResults.map((result) => result.session).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  // Keep the public snapshot detached from cached parse results. Title/status
+  // overlays are applied to the snapshot later and must not mutate a reusable
+  // transcript or terminal-log cache entry.
+  const sessions = sessionResults
+    .map((result) => ({ ...result.session }))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   const artifacts = sessionResults.flatMap((result) => result.artifacts)
+  const sessionById = new Map(sessions.map((session) => [session.id, session]))
+  const sessionsByProject = new Map<string, SessionRecord[]>()
+  for (const session of sessions) {
+    const grouped = sessionsByProject.get(session.projectId) ?? []
+    grouped.push(session)
+    sessionsByProject.set(session.projectId, grouped)
+  }
 
   const projectMap = new Map<string, ProjectRecord>()
   for (const result of sessionResults) {
-    const session = result.session
+    const session = sessionById.get(result.session.id) ?? result.session
     const inferredRoot =
-      artifacts.find((artifact) => artifact.sessionId === session.id && artifact.label === 'Inferred project root')
+      result.artifacts.find((artifact) => artifact.label === 'Inferred project root')
         ?.path ?? session.cwd
     const current = projectMap.get(session.projectId)
     const decisions = result.candidates.filter((candidate) => candidate.kind === 'decision').length
@@ -157,7 +166,7 @@ export async function buildSnapshotModel(sessionResults: TranscriptParseResult[]
 
   const projectClusters: ClusterRecord[] = projects
     .map((project): ClusterRecord => {
-      const clusterSessions = sessions.filter((session) => session.projectId === project.id)
+      const clusterSessions = sessionsByProject.get(project.id) ?? []
       const branchCounts = new Map<string, number>()
       for (const session of clusterSessions) {
         const branch = session.gitBranch
@@ -179,20 +188,30 @@ export async function buildSnapshotModel(sessionResults: TranscriptParseResult[]
     .filter((cluster) => cluster.sessionIds.length > 0)
 
   const workspaceClusters = projects
-    .map((project) => makeWorkspaceCluster(project, sessions.filter((session) => session.projectId === project.id)))
+    .map((project) => makeWorkspaceCluster(project, sessionsByProject.get(project.id) ?? []))
     .filter((cluster): cluster is ClusterRecord => cluster !== null)
 
   const timeBurstClusters = makeTimeBurstClusters(sessions)
   const clusters = [...projectClusters, ...workspaceClusters, ...timeBurstClusters]
+  const clusterIdsBySession = new Map<string, string[]>()
+  for (const cluster of clusters) {
+    for (const sessionId of cluster.sessionIds) {
+      const ids = clusterIdsBySession.get(sessionId) ?? []
+      ids.push(cluster.id)
+      clusterIdsBySession.set(sessionId, ids)
+    }
+  }
 
   for (const cluster of clusters) {
+    const clusterSessionIds = new Set(cluster.sessionIds)
+    const clusterLabelPrefix = cluster.label.split(' ')[0]
     const related = clusters
       .filter((candidate) => candidate.id !== cluster.id)
       .filter((candidate) => {
-        const sharedSessions = candidate.sessionIds.filter((id) => cluster.sessionIds.includes(id)).length
+        const sharedSessions = candidate.sessionIds.some((id) => clusterSessionIds.has(id))
         const sharedBranch = cluster.branch && candidate.branch && cluster.branch === candidate.branch
-        const sharedProjectPrefix = cluster.label.split(' ')[0] === candidate.label.split(' ')[0]
-        return sharedSessions > 0 || Boolean(sharedBranch) || sharedProjectPrefix
+        const sharedProjectPrefix = clusterLabelPrefix === candidate.label.split(' ')[0]
+        return sharedSessions || Boolean(sharedBranch) || sharedProjectPrefix
       })
       .slice(0, 4)
       .map((candidate) => candidate.id)
@@ -201,6 +220,9 @@ export async function buildSnapshotModel(sessionResults: TranscriptParseResult[]
 
   const workLocationMap = new Map<string, WorkLocationRecord>()
   const workLocationEvents = new Map<string, string[]>()
+  const workLocationSessionIds = new Map<string, Set<string>>()
+  const workLocationProjectIds = new Map<string, Set<string>>()
+  const workLocationClusterIds = new Map<string, Set<string>>()
   const evidenceRank: Record<ArtifactEvidence, number> = {
     mentioned: 1,
     inspected: 2,
@@ -211,9 +233,9 @@ export async function buildSnapshotModel(sessionResults: TranscriptParseResult[]
   for (const artifact of artifacts) {
     if (!artifact.path) continue
     if (isIgnoredWorkLocationPath(artifact.path)) continue
-    const session = sessions.find((entry) => entry.id === artifact.sessionId)
+    const session = sessionById.get(artifact.sessionId)
     if (!session) continue
-    const clusterIds = clusters.filter((cluster) => cluster.sessionIds.includes(session.id)).map((cluster) => cluster.id)
+    const clusterIds = clusterIdsBySession.get(session.id) ?? []
     const key = artifact.path
     const count = artifactOccurrenceCount(artifact)
     const timestamps = artifactEventTimestamps(artifact)
@@ -231,6 +253,9 @@ export async function buildSnapshotModel(sessionResults: TranscriptParseResult[]
     const mentionCount = evidence === 'mentioned' ? count : 0
 
     if (!current) {
+      workLocationSessionIds.set(key, new Set([session.id]))
+      workLocationProjectIds.set(key, new Set([session.projectId]))
+      workLocationClusterIds.set(key, new Set(clusterIds))
       workLocationMap.set(key, {
         id: stableId('workloc', key),
         path: artifact.path,
@@ -252,10 +277,21 @@ export async function buildSnapshotModel(sessionResults: TranscriptParseResult[]
     current.readCount = (current.readCount ?? 0) + readCount
     current.writeCount = (current.writeCount ?? 0) + writeCount
     current.mentionCount = (current.mentionCount ?? 0) + mentionCount
-    if (!current.sessionIds.includes(session.id)) current.sessionIds.push(session.id)
-    if (!current.projectIds.includes(session.projectId)) current.projectIds.push(session.projectId)
+    const seenSessions = workLocationSessionIds.get(key)!
+    if (!seenSessions.has(session.id)) {
+      seenSessions.add(session.id)
+      current.sessionIds.push(session.id)
+    }
+    const seenProjects = workLocationProjectIds.get(key)!
+    if (!seenProjects.has(session.projectId)) {
+      seenProjects.add(session.projectId)
+      current.projectIds.push(session.projectId)
+    }
+    const seenClusters = workLocationClusterIds.get(key)!
     for (const clusterId of clusterIds) {
-      if (!current.clusterIds.includes(clusterId)) current.clusterIds.push(clusterId)
+      if (seenClusters.has(clusterId)) continue
+      seenClusters.add(clusterId)
+      current.clusterIds.push(clusterId)
     }
     if (!current.firstActivityAt || current.firstActivityAt > artifactFirst) current.firstActivityAt = artifactFirst
     if (!current.lastActivityAt || current.lastActivityAt < artifactLast) current.lastActivityAt = artifactLast

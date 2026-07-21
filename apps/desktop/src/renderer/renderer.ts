@@ -192,6 +192,7 @@ let showArchivedWorkstreams = false
 let activeTranscript: TranscriptView | null = null
 const projectDetailCache = new Map<string, CacheEntry<ProjectDetail>>()
 const sessionDetailCache = new Map<string, CacheEntry<SessionDetail>>()
+const sessionDetailRequests = new Map<string, Promise<SessionDetail>>()
 const terminalViews = new Map<string, TerminalView>()
 let activeTerminalId: string | null = null
 let terminalOnlyCwd: string | null = null
@@ -199,9 +200,15 @@ let terminalFitFrame: number | null = null
 let terminalFitGeneration = 0
 let terminalResizeObserver: ResizeObserver | null = null
 let timelineRenderVersion = 0
+let timelineObserver: IntersectionObserver | null = null
+let timelineLoadsInFlight = 0
+let timelineLoadQueue: TimelineLoadTask[] = []
+let queuedTimelineSessionIds = new Set<string>()
 let projectSelectionVersion = 0
 let cwdCompletionState: DirectoryCompletionState | null = null
 let cwdCompletionInFlight = false
+let transcriptVisibleMessageLimit = 0
+let transcriptSearchTimer: number | null = null
 
 const GLOBAL_CWD_STORAGE_KEY = 'gogoagent.globalCwd'
 const AUTO_NAME_SEEN_STORAGE_KEY = 'gogoagent.autoNameSeenWorkstreams.v4'
@@ -240,6 +247,11 @@ const TERMINAL_FIT_MAX_TRIM_PASSES = 4
 const TERMINAL_REFIT_DELAYS_MS = [80, 250] as const
 const TERMINAL_SCROLL_SETTLE_DELAYS_MS = [0, 60, 160, 320] as const
 const TIMELINE_DETAIL_CONCURRENCY = 4
+const TIMELINE_LAZY_ROOT_MARGIN_PX = 700
+const TRANSCRIPT_SESSION_PAGE_SIZE = 3
+const TRANSCRIPT_INITIAL_MESSAGE_LIMIT = 160
+const TRANSCRIPT_MESSAGE_PAGE_SIZE = 240
+const TRANSCRIPT_SEARCH_DEBOUNCE_MS = 120
 const PROJECT_DETAIL_CACHE_MS = 60_000
 const SESSION_DETAIL_CACHE_MS = 60_000
 const PROJECT_ACTIVITY_UI_THROTTLE_MS = 15_000
@@ -271,6 +283,16 @@ interface TranscriptView {
   subtitle: string
   meta: string
   sections: TranscriptSection[]
+  pendingSessions?: SessionRecord[]
+  loadingSessions?: boolean
+  loadError?: string
+}
+
+interface TimelineLoadTask {
+  session: SessionRecord
+  index: number
+  renderVersion: number
+  projectId: string
 }
 
 interface TerminalView {
@@ -589,9 +611,19 @@ async function getProjectDetail(projectId: string) {
 async function getSessionDetail(sessionId: string) {
   const cached = getCachedValue(sessionDetailCache, sessionId, SESSION_DETAIL_CACHE_MS)
   if (cached) return cached
-  const detail = await window.gogoagent.sessions.get(sessionId)
-  setCachedValue(sessionDetailCache, sessionId, detail)
-  return detail
+  const pending = sessionDetailRequests.get(sessionId)
+  if (pending) return pending
+
+  const request = window.gogoagent.sessions.get(sessionId)
+    .then((detail) => {
+      setCachedValue(sessionDetailCache, sessionId, detail)
+      return detail
+    })
+    .finally(() => {
+      if (sessionDetailRequests.get(sessionId) === request) sessionDetailRequests.delete(sessionId)
+    })
+  sessionDetailRequests.set(sessionId, request)
+  return request
 }
 
 function currentWorkstreamTerminals() {
@@ -631,18 +663,24 @@ function bumpProjectActivity(workstreamId: string | undefined, timestamp = new D
   if (!shouldRender) return false
 
   projectActivityRenderedAt.set(workstreamId, nowMs)
-  projects = sortProjectsByActivity(projects.map((entry) => (
-    entry.id === workstreamId ? { ...entry, lastUpdatedAt: timestamp } : entry
-  )))
+  const updatedProject = { ...project, lastUpdatedAt: timestamp }
+  projects = projects.map((entry) => entry.id === workstreamId ? updatedProject : entry)
 
   if (currentDetail?.project.id === workstreamId && timestamp.localeCompare(currentDetail.project.lastUpdatedAt) > 0) {
-    const updatedProject = { ...currentDetail.project, lastUpdatedAt: timestamp }
-    currentDetail = { ...currentDetail, project: updatedProject }
+    currentDetail = { ...currentDetail, project: { ...currentDetail.project, lastUpdatedAt: timestamp } }
     setCachedValue(projectDetailCache, workstreamId, currentDetail)
-    renderDetailMeta(updatedProject)
+    renderDetailMeta(currentDetail.project)
   }
 
-  renderProjectsList()
+  // Keep the sidebar stable while output is streaming. Re-sorting and
+  // rebuilding every card here can move a click target or drop keyboard focus.
+  const card = [...projectsList.querySelectorAll<HTMLElement>('.project-card')]
+    .find((entry) => entry.dataset.projectId === workstreamId)
+  const activity = card?.querySelector<HTMLElement>('.session-card-meta')
+  if (activity) {
+    activity.textContent = fmtRelative(timestamp)
+    activity.title = timestamp
+  }
   return true
 }
 
@@ -1027,11 +1065,9 @@ function writeTerminalData(view: TerminalView, data: string, logBytes?: number) 
   const needsInputSuppressionChanged = updateTerminalNeedsInputSuppression(view, data)
   if (view.logRestored) {
     queueTerminalWrite(view, data, { scroll: true })
-    if (needsInputSuppressionChanged) renderProjectsList()
     return needsInputSuppressionChanged
   }
   view.pendingData.push({ data, logBytes })
-  if (needsInputSuppressionChanged) renderProjectsList()
   return needsInputSuppressionChanged
 }
 
@@ -1370,7 +1406,7 @@ function selectTerminal(id: string | null) {
   }
 }
 
-function renderTerminalTabs() {
+function renderTerminalTabs(options: { fit?: boolean } = {}) {
   const terminals = currentWorkstreamTerminals()
   terminalEmpty.classList.toggle('hidden', terminals.length > 0)
   terminalActions.classList.toggle('hidden', terminals.length === 0)
@@ -1413,7 +1449,7 @@ function renderTerminalTabs() {
   for (const view of terminalViews.values()) {
     view.element.classList.toggle('hidden', view.record.id !== activeTerminalId)
   }
-  if (activeTerminalId) {
+  if (activeTerminalId && options.fit !== false) {
     const view = terminalViews.get(activeTerminalId)
     scheduleTerminalFit(view)
     settleTerminalAtBottom(view)
@@ -1746,7 +1782,7 @@ function setupTerminalEvents() {
     const view = terminalViews.get(id)
     if (!view) return
     if (lastActivityAt) view.record.lastActivityAt = lastActivityAt
-    const activityChanged = bumpProjectActivity(view.record.workstreamId, lastActivityAt)
+    bumpProjectActivity(view.record.workstreamId, lastActivityAt)
     if (data) markWorkstreamUnread(view.record.workstreamId)
     if (needsInput !== undefined) {
       view.record.needsInput = needsInput
@@ -1761,11 +1797,9 @@ function setupTerminalEvents() {
         settleTerminalAtBottom(view)
       }
       projects = sortProjectsByActivity(projects)
-      renderTerminalTabs()
+      renderTerminalTabs({ fit: false })
       renderProjectsList()
       void refreshProjectsIfChanged()
-    } else if (activityChanged) {
-      renderTerminalTabs()
     }
   })
   window.gogoagent.terminals.onExit(({ id, record }) => {
@@ -2506,8 +2540,9 @@ function renderTimelineSession(detail: SessionDetail, index: number) {
 }
 
 function renderTimelineSessionPlaceholder(session: SessionRecord, index: number) {
+  const collapsed = collapsedTimelineSessions.has(session.id)
   return `
-    <section class="timeline-session timeline-loading" data-session-id="${esc(session.id)}">
+    <section class="timeline-session${collapsed ? ' collapsed' : ' timeline-loading'}" data-session-id="${esc(session.id)}">
       <article class="timeline-event timeline-boundary">
         <div class="timeline-dot"></div>
         <div class="timeline-card">
@@ -2516,8 +2551,18 @@ function renderTimelineSessionPlaceholder(session: SessionRecord, index: number)
               <p class="eyebrow">Session ${index + 1}</p>
               <h3>${esc(session.title || session.id)}</h3>
             </div>
+            <div class="button-row timeline-session-actions">
+              <button
+                class="small-button timeline-toggle-button"
+                type="button"
+                data-session-id="${esc(session.id)}"
+                aria-expanded="${collapsed ? 'false' : 'true'}"
+                title="${collapsed ? 'Show this chat in the timeline.' : 'Hide this chat in the timeline.'}"
+              >${buttonContent(collapsed ? 'chevron-right' : 'chevron-down', collapsed ? 'Show' : 'Hide')}</button>
+              <button class="small-button timeline-session-button" type="button" data-session-id="${esc(session.id)}" title="Open the full transcript for this session.">${buttonContent('book-open', 'Transcript')}</button>
+            </div>
           </div>
-          <p class="meta">${fmtDateRange(session.startedAt, session.updatedAt)} · loading timeline...</p>
+          <p class="meta">${fmtDateRange(session.startedAt, session.updatedAt)} · ${collapsed ? `${session.messageCount} messages hidden; expand to load.` : 'loading when visible...'}</p>
           <p class="meta mono">${esc(session.cwd)}</p>
         </div>
       </article>
@@ -2587,10 +2632,62 @@ function handleTimelineClick(event: MouseEvent) {
   }
 }
 
+function timelineTaskKey(task: TimelineLoadTask) {
+  return `${task.renderVersion}:${task.session.id}`
+}
+
+async function loadTimelineTask(task: TimelineLoadTask) {
+  if (
+    timelineRenderVersion !== task.renderVersion ||
+    currentDetail?.project.id !== task.projectId ||
+    collapsedTimelineSessions.has(task.session.id)
+  ) return
+
+  try {
+    const sessionDetail = await getSessionDetail(task.session.id)
+    if (timelineRenderVersion !== task.renderVersion || currentDetail?.project.id !== task.projectId) return
+    replaceTimelineSession(task.session.id, renderTimelineSession(sessionDetail, task.index))
+    if (currentDetail) renderWorkstreamDigest(currentDetail)
+  } catch (error) {
+    if (timelineRenderVersion !== task.renderVersion || currentDetail?.project.id !== task.projectId) return
+    replaceTimelineSession(task.session.id, renderTimelineSessionError(task.session, task.index, error))
+    if (currentDetail) renderWorkstreamDigest(currentDetail)
+  }
+}
+
+function pumpTimelineLoadQueue() {
+  while (timelineLoadsInFlight < TIMELINE_DETAIL_CONCURRENCY && timelineLoadQueue.length > 0) {
+    const task = timelineLoadQueue.shift()
+    if (!task) return
+    if (timelineRenderVersion !== task.renderVersion || currentDetail?.project.id !== task.projectId) {
+      queuedTimelineSessionIds.delete(timelineTaskKey(task))
+      continue
+    }
+    timelineLoadsInFlight += 1
+    void loadTimelineTask(task).finally(() => {
+      timelineLoadsInFlight -= 1
+      queuedTimelineSessionIds.delete(timelineTaskKey(task))
+      pumpTimelineLoadQueue()
+    })
+  }
+}
+
+function queueTimelineTask(task: TimelineLoadTask) {
+  const key = timelineTaskKey(task)
+  if (queuedTimelineSessionIds.has(key)) return
+  queuedTimelineSessionIds.add(key)
+  timelineLoadQueue.push(task)
+  pumpTimelineLoadQueue()
+}
+
 function renderTimeline(detail: ProjectDetail) {
   const renderVersion = ++timelineRenderVersion
   const projectId = detail.project.id
   const sessions = sortSessionsForDisplay(detail.sessions)
+  timelineObserver?.disconnect()
+  timelineObserver = null
+  timelineLoadQueue = []
+  queuedTimelineSessionIds = new Set()
   if (!sessions.length) {
     renderEmpty(detailTimeline, 'No session timeline available.')
     return
@@ -2600,29 +2697,33 @@ function renderTimeline(detail: ProjectDetail) {
     .map((session, index) => renderTimelineSessionPlaceholder(session, index))
     .join('')
 
-  let nextIndex = 0
-  const loadNextSession = async (): Promise<void> => {
-    const index = nextIndex
-    nextIndex += 1
-    const session = sessions[index]
-    if (!session) return
+  const taskBySessionId = new Map(sessions.map((session, index) => [
+    session.id,
+    { session, index, renderVersion, projectId } satisfies TimelineLoadTask,
+  ]))
+  const loadableElements = [...detailTimeline.querySelectorAll<HTMLElement>('.timeline-session.timeline-loading')]
 
-    try {
-      const sessionDetail = await getSessionDetail(session.id)
-      if (timelineRenderVersion !== renderVersion || currentDetail?.project.id !== projectId) return
-      replaceTimelineSession(session.id, renderTimelineSession(sessionDetail, index))
-      if (currentDetail) renderWorkstreamDigest(currentDetail)
-    } catch (error) {
-      if (timelineRenderVersion !== renderVersion || currentDetail?.project.id !== projectId) return
-      replaceTimelineSession(session.id, renderTimelineSessionError(session, index, error))
-      if (currentDetail) renderWorkstreamDigest(currentDetail)
+  if (!('IntersectionObserver' in window)) {
+    for (const element of loadableElements) {
+      const task = element.dataset.sessionId ? taskBySessionId.get(element.dataset.sessionId) : undefined
+      if (task) queueTimelineTask(task)
     }
-    await loadNextSession()
+    return
   }
 
-  for (let i = 0; i < Math.min(TIMELINE_DETAIL_CONCURRENCY, sessions.length); i += 1) {
-    void loadNextSession()
-  }
+  timelineObserver = new IntersectionObserver((entries, observer) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue
+      const element = entry.target as HTMLElement
+      observer.unobserve(element)
+      const task = element.dataset.sessionId ? taskBySessionId.get(element.dataset.sessionId) : undefined
+      if (task) queueTimelineTask(task)
+    }
+  }, {
+    root: contentRoot,
+    rootMargin: `${TIMELINE_LAZY_ROOT_MARGIN_PX}px 0px`,
+  })
+  for (const element of loadableElements) timelineObserver.observe(element)
 }
 
 function renderRefinedLessons(lessons: RefinedLesson[]) {
@@ -3090,15 +3191,29 @@ function transcriptPlainText(view: TranscriptView) {
 function renderTranscriptDialog() {
   if (!activeTranscript) return
   const query = transcriptSearch.value.trim()
+  const lowerQuery = query.toLowerCase()
   transcriptSubtitle.textContent = activeTranscript.subtitle
   transcriptTitle.textContent = activeTranscript.title
-  transcriptMeta.textContent = activeTranscript.meta
+  const pendingSessionCount = activeTranscript.pendingSessions?.length ?? 0
+  const loadedSessionCount = activeTranscript.sections.length
+  transcriptMeta.textContent = [
+    activeTranscript.meta,
+    pendingSessionCount > 0 ? `${loadedSessionCount} loaded` : undefined,
+  ].filter((value): value is string => Boolean(value)).join(' · ')
 
-  const html = activeTranscript.sections
-    .map((section) => {
-      const messages = query
-        ? section.messages.filter((message) => message.text.toLowerCase().includes(query.toLowerCase()))
+  let remainingMessages = transcriptVisibleMessageLimit
+  let matchedMessageCount = 0
+  let renderedMessageCount = 0
+  const sectionHtml: string[] = []
+  for (const section of activeTranscript.sections) {
+      const matchingMessages = query
+        ? section.messages.filter((message) => message.text.toLowerCase().includes(lowerQuery))
         : section.messages
+      matchedMessageCount += matchingMessages.length
+      const messages = matchingMessages.slice(0, Math.max(0, remainingMessages))
+      remainingMessages -= messages.length
+      renderedMessageCount += messages.length
+      if (!messages.length) continue
       const commandArtifacts = section.artifacts
         .filter((artifact) => artifact.kind === 'command' || artifact.kind === 'tool_call')
         .slice(0, 8)
@@ -3106,7 +3221,7 @@ function renderTranscriptDialog() {
         .filter((candidate) => candidate.kind !== 'summary')
         .slice(0, 6)
 
-      return `
+      sectionHtml.push(`
         <section class="transcript-session">
           <header class="transcript-session-header">
             <div>
@@ -3126,30 +3241,96 @@ function renderTranscriptDialog() {
               : ''
           }
           <div class="transcript-messages">
-            ${
-              messages.length
-                ? messages.map((message) => `
-                    <article class="transcript-message">
-                      <div class="transcript-message-meta">
-                        <span class="role-chip role-${esc(message.role)}">${esc(message.role)}</span>
-                        <span>${esc(message.timestamp)}</span>
-                      </div>
-                      <pre>${highlight(message.text, query)}</pre>
-                    </article>
-                  `).join('')
-                : `<p class="empty">${query ? 'No messages match this transcript search.' : 'No transcript messages.'}</p>`
-            }
+            ${messages.map((message) => `
+              <article class="transcript-message">
+                <div class="transcript-message-meta">
+                  <span class="role-chip role-${esc(message.role)}">${esc(message.role)}</span>
+                  <span>${esc(message.timestamp)}</span>
+                </div>
+                <pre>${highlight(message.text, query)}</pre>
+              </article>
+            `).join('')}
           </div>
         </section>
-      `
-    })
-    .join('')
+      `)
+  }
 
-  transcriptBody.innerHTML = html || '<p class="empty">No transcript loaded.</p>'
+  const controls = [
+    renderedMessageCount < matchedMessageCount
+      ? `<button class="secondary-button transcript-load-more-messages" type="button">Show ${Math.min(TRANSCRIPT_MESSAGE_PAGE_SIZE, matchedMessageCount - renderedMessageCount)} more messages</button>`
+      : '',
+    pendingSessionCount > 0
+      ? `<button class="secondary-button transcript-load-more-sessions" type="button"${activeTranscript.loadingSessions ? ' disabled' : ''}>${activeTranscript.loadingSessions ? 'Loading sessions...' : `Load ${Math.min(TRANSCRIPT_SESSION_PAGE_SIZE, pendingSessionCount)} more sessions`}</button>`
+      : '',
+  ].filter(Boolean).join('')
+  const empty = activeTranscript.loadingSessions
+    ? '<p class="empty">Loading transcript sessions...</p>'
+    : query
+      ? '<p class="empty">No messages in the loaded sessions match this search.</p>'
+      : '<p class="empty">No transcript messages loaded.</p>'
+  const error = activeTranscript.loadError
+    ? `<p class="meta transcript-load-error">${esc(activeTranscript.loadError)}</p>`
+    : ''
+  transcriptBody.innerHTML = [
+    sectionHtml.join('') || empty,
+    error,
+    controls ? `<div class="transcript-pagination"><span class="meta">Showing ${renderedMessageCount} of ${matchedMessageCount} matching loaded messages.</span><div class="button-row">${controls}</div></div>` : '',
+  ].join('')
+}
+
+function resetTranscriptPagination() {
+  transcriptVisibleMessageLimit = TRANSCRIPT_INITIAL_MESSAGE_LIMIT
+}
+
+async function loadMoreTranscriptSessions(count = TRANSCRIPT_SESSION_PAGE_SIZE) {
+  const view = activeTranscript
+  if (!view || view.loadingSessions || !view.pendingSessions?.length) return
+  const batch = view.pendingSessions.slice(0, count)
+  view.loadingSessions = true
+  view.loadError = undefined
+  renderTranscriptDialog()
+
+  const settled = await Promise.allSettled(batch.map((session) => getSessionDetail(session.id)))
+  if (activeTranscript !== view) return
+
+  const details = settled
+    .filter((result): result is PromiseFulfilledResult<SessionDetail> => result.status === 'fulfilled')
+    .map((result) => result.value)
+  view.sections.push(...details.map((detail) => ({
+    session: detail.session,
+    artifacts: detail.artifacts,
+    candidates: detail.candidates,
+    messages: detail.messages,
+  })))
+  view.sections.sort((a, b) => a.session.startedAt.localeCompare(b.session.startedAt))
+  view.pendingSessions = view.pendingSessions.slice(batch.length)
+  const failureCount = settled.length - details.length
+  if (failureCount > 0) view.loadError = `${failureCount} transcript session${failureCount === 1 ? '' : 's'} failed to load.`
+  view.loadingSessions = false
+  renderTranscriptDialog()
+}
+
+async function loadAllTranscriptSessionsForSearch() {
+  const view = activeTranscript
+  if (!view) return
+  while (
+    activeTranscript === view &&
+    transcriptSearch.value.trim() &&
+    (view?.loadingSessions || (view?.pendingSessions?.length ?? 0) > 0)
+  ) {
+    if (view.loadingSessions) {
+      await delay(40)
+      continue
+    }
+    await loadMoreTranscriptSessions(view.pendingSessions?.length ?? 0)
+  }
+  if (activeTranscript === view) renderTranscriptDialog()
 }
 
 async function openSessionTranscript(sessionId: string) {
+  resetTranscriptPagination()
   transcriptSearch.value = ''
+  activeTranscript = null
   transcriptBody.innerHTML = '<p class="empty">Loading transcript…</p>'
   transcriptDialog.showModal()
   try {
@@ -3175,34 +3356,21 @@ async function openSessionTranscript(sessionId: string) {
 
 async function openWorkstreamTranscript() {
   if (!currentDetail) return
+  resetTranscriptPagination()
   transcriptSearch.value = ''
-  transcriptBody.innerHTML = '<p class="empty">Loading transcript series…</p>'
   transcriptDialog.showModal()
-
-  try {
-    const details = await Promise.all(
-      currentDetail.sessions
-        .slice()
-        .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
-        .map((session) => getSessionDetail(session.id)),
-    )
-    activeTranscript = {
-      title: currentDetail.project.name,
-      subtitle: 'Workstream transcript',
-      meta: `${currentDetail.project.repoRoot} · ${details.length} session${details.length === 1 ? '' : 's'} · ${fmtDateRange(currentDetail.project.firstStartedAt, currentDetail.project.lastUpdatedAt)}`,
-      sections: details.map((detail) => ({
-        session: detail.session,
-        artifacts: detail.artifacts,
-        candidates: detail.candidates,
-        messages: detail.messages,
-      })),
-    }
-    renderTranscriptDialog()
-  } catch (error) {
-    transcriptTitle.textContent = 'Transcript failed to load'
-    transcriptMeta.textContent = (error as Error).message
-    transcriptBody.innerHTML = ''
+  const sessions = currentDetail.sessions
+    .slice()
+    .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+  activeTranscript = {
+    title: currentDetail.project.name,
+    subtitle: 'Workstream transcript',
+    meta: `${currentDetail.project.repoRoot} · ${sessions.length} session${sessions.length === 1 ? '' : 's'} · ${fmtDateRange(currentDetail.project.firstStartedAt, currentDetail.project.lastUpdatedAt)}`,
+    sections: [],
+    pendingSessions: sessions,
   }
+  renderTranscriptDialog()
+  await loadMoreTranscriptSessions()
 }
 
 async function copyTranscript() {
@@ -3537,7 +3705,30 @@ renameInput.addEventListener('keydown', (event) => {
   }
 })
 transcriptButton.addEventListener('click', () => void openWorkstreamTranscript())
-transcriptSearch.addEventListener('input', renderTranscriptDialog)
+transcriptSearch.addEventListener('input', () => {
+  resetTranscriptPagination()
+  if (transcriptSearchTimer !== null) window.clearTimeout(transcriptSearchTimer)
+  transcriptSearchTimer = window.setTimeout(() => {
+    transcriptSearchTimer = null
+    if (transcriptSearch.value.trim() && (activeTranscript?.pendingSessions?.length ?? 0) > 0) {
+      void loadAllTranscriptSessionsForSearch()
+      return
+    }
+    renderTranscriptDialog()
+  }, TRANSCRIPT_SEARCH_DEBOUNCE_MS)
+})
+transcriptBody.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  if (target.closest('.transcript-load-more-messages')) {
+    transcriptVisibleMessageLimit += TRANSCRIPT_MESSAGE_PAGE_SIZE
+    renderTranscriptDialog()
+    return
+  }
+  if (target.closest('.transcript-load-more-sessions')) {
+    void loadMoreTranscriptSessions()
+  }
+})
 copyTranscriptButton.addEventListener('click', () => void copyTranscript())
 suggestTitleButton.addEventListener('click', () => void runSuggestTitle())
 settingsToggle.addEventListener('click', () => {

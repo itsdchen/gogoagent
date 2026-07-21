@@ -165,6 +165,44 @@ async function verifyNeedsInputDetection() {
   )
 }
 
+async function verifyTerminalLogCache(testHome) {
+  const modulePath = path.join(repoRoot, 'services/sidecar/dist/services/sidecar/src/lib/terminalLogs.js')
+  const { loadTerminalLogSessions } = await import(pathToFileURL(modulePath).href)
+  const terminalDir = path.join(testHome, 'terminal-cache-fixture')
+  const logPath = path.join(terminalDir, 'cached.ansi.log')
+  const metadataPath = path.join(terminalDir, 'cached.json')
+  await mkdir(terminalDir, { recursive: true })
+  await writeFile(logPath, 'first terminal cache line\n')
+  await writeFile(metadataPath, JSON.stringify({
+    version: 1,
+    id: 'terminal-cache-fixture',
+    kind: 'shell',
+    title: 'Terminal cache fixture',
+    command: 'bash',
+    cwd: path.join(testHome, 'terminal-cache-repo'),
+    startedAt: '2026-01-02T03:04:05.000Z',
+    lastActivityAt: '2026-01-02T03:05:05.000Z',
+    status: 'exited',
+    logPath,
+    logBytes: 26,
+    userInteracted: true,
+  }))
+  const deps = {
+    resolveProjectRoot: async (cwd) => cwd,
+    projectIdForRoot: (cwd) => `project:${cwd}`,
+  }
+
+  const first = await loadTerminalLogSessions(terminalDir, deps)
+  const cached = await loadTerminalLogSessions(terminalDir, deps)
+  assert.equal(first.length, 1, 'terminal cache fixture was not indexed')
+  assert.strictEqual(cached[0], first[0], 'unchanged terminal logs should reuse their parsed result')
+
+  await writeFile(logPath, 'first terminal cache line\nsecond line\n')
+  const refreshed = await loadTerminalLogSessions(terminalDir, deps)
+  assert.notStrictEqual(refreshed[0], first[0], 'changed terminal logs should invalidate their parsed result')
+  assert.match(refreshed[0].messages.map((message) => message.text).join('\n'), /second line/)
+}
+
 async function main() {
   const testHome = await mkdtemp(path.join(os.tmpdir(), 'gogoagent-clean-start-'))
   let sidecar
@@ -221,6 +259,19 @@ async function main() {
     assert.equal(populatedSnapshot.sessions.length, 1, 'fixture did not become a session')
     assert.equal(populatedSnapshot.workstreams.length, 1, 'fixture did not become a workstream')
     assert.match(populatedSnapshot.workstreams[0].name, /clean-start fixture/i)
+
+    const projectId = populatedSnapshot.workstreams[0].id
+    await requestJson(baseUrl, token, `/projects/${encodeURIComponent(projectId)}`)
+    const beforeSessionDetail = await requestJson(baseUrl, token, '/debug/state')
+    const sessionDetail = await requestJson(baseUrl, token, '/sessions/clean-start-session')
+    const afterSessionDetail = await requestJson(baseUrl, token, '/debug/state')
+    assert.equal(sessionDetail.session.id, 'clean-start-session')
+    assert.equal(sessionDetail.messages.length, 1)
+    assert.equal(
+      afterSessionDetail.lastScan.startedAt,
+      beforeSessionDetail.lastScan.startedAt,
+      'session detail should reuse the project snapshot generation instead of rescanning',
+    )
 
     const terminalLogDir = path.join(testHome, '.gogoagent', 'terminal-logs')
     const historicalTerminalId = 'clean-start-historical'
@@ -329,8 +380,9 @@ async function main() {
 
     await verifyLabelJobDedup(testHome)
     await verifyNeedsInputDetection()
+    await verifyTerminalLogCache(testHome)
 
-    console.log('Clean-start smoke test passed: discovery, auth restart, historical terminals, durable-state migration, label deduplication, and input detection work.')
+    console.log('Clean-start smoke test passed: discovery, auth restart, generation reuse, terminal caching, historical terminals, durable-state migration, label deduplication, and input detection work.')
   } finally {
     await stop(sidecar)
     await rm(testHome, { recursive: true, force: true })
