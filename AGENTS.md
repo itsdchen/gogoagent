@@ -11,10 +11,10 @@ work, and leave it accurate when it hands off. Keep it short and never include
 tokens, private transcript contents, personal paths, or customer data.
 
 - Agent: Codex (current session)
-- Task: Rewrite the README around concrete user pain, obvious value, and non-repetitive language.
+- Task: Improve macOS first-run recovery for Corepack, Electron, and native PTY compatibility.
 - Started: 2026-07-21
-- Status / next step: README now uses the user's concise opening and pain-to-value framing throughout; ready for review and commit.
-- Last verification: All README-relative links resolve and `git diff --check` passes. The change is documentation-only and leaves the previously verified build and screenshots unchanged.
+- Status / next step: Startup now also smoke-tests node-pty and rebuilds it from source when needed; the generated local pnpm store is ignored; ready for review.
+- Last verification: A source-built node-pty successfully spawned `/bin/zsh`; `./start.sh --check`, typecheck, desktop build, and `git diff --check` pass on macOS arm64 with Node 26.5.0.
 
 ## Product
 
