@@ -11,10 +11,10 @@ work, and leave it accurate when it hands off. Keep it short and never include
 tokens, private transcript contents, personal paths, or customer data.
 
 - Agent: Codex (current session)
-- Task: Reduce repeated indexing and rendering work; make timelines and transcripts lazy without regressing terminal lifecycle or attention UX.
-- Started: 2026-07-20
-- Status / next step: Performance pass complete; test the rebuilt app with a large workstream, then commit after review.
-- Last verification: Typecheck, desktop/sidecar builds, startup/shell/diff checks, expanded clean-start cache/generation smoke test, and explicit-port launcher test passed.
+- Task: Finish friend-friendly repository onboarding for the launcher/naming UX pass and commit the reviewed change set.
+- Started: 2026-07-21
+- Status / next step: Launcher/naming UX and friend-facing onboarding are complete and ready to commit.
+- Last verification: Full typecheck/build, clean-start smoke (including naming provenance), launcher-port smoke, start.sh --check, and git diff checks passed. Linux Electron sandbox helper still warns when not root-owned mode 4755.
 
 ## Product
 

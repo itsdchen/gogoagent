@@ -17,6 +17,24 @@
         <div class="sidebar-actions">
           <div class="button-row">
             <button
+              id="label-workstreams-button"
+              class="secondary-button"
+              type="button"
+              title="Use the local Codex CLI to improve workstream names that are missing or out of date."
+            >
+              <span class="button-icon" data-icon="lightbulb" aria-hidden="true"></span>
+              <span class="button-label">Improve names</span>
+            </button>
+            <button
+              id="label-workstreams-retry-button"
+              class="secondary-button hidden"
+              type="button"
+              title="Retry the workstream names that failed."
+            >
+              <span class="button-icon" data-icon="refresh-cw" aria-hidden="true"></span>
+              <span class="button-label">Retry</span>
+            </button>
+            <button
               id="refresh-button"
               class="icon-button secondary-button"
               type="button"
@@ -31,33 +49,58 @@
 
         <section class="global-launch-panel" aria-labelledby="global-launch-label">
           <p id="global-launch-label" class="label">Start a workstream</p>
-          <div class="new-workstream-row">
-            <input
-              id="global-cwd-input"
-              type="text"
-              placeholder="Working directory"
-              spellcheck="false"
-              title="Directory to use for a new workstream. Press Tab to cycle directory completions."
-            />
-            <button
-              id="global-use-current-button"
-              class="icon-button secondary-button"
-              type="button"
-              title="Use selected repo"
-              aria-label="Use selected repo"
-            >
-              <span class="button-icon" data-icon="folder-input" aria-hidden="true"></span>
-            </button>
-            <button
-              id="new-workstream-button"
-              class="icon-button"
-              type="button"
-              title="New workstream"
-              aria-label="New workstream"
-            >
-              <span class="button-icon" data-icon="plus" aria-hidden="true"></span>
-            </button>
+          <div class="directory-picker">
+            <div class="new-workstream-row">
+              <input
+                id="global-cwd-input"
+                type="text"
+                placeholder="Working directory (home by default)"
+                spellcheck="false"
+                autocomplete="off"
+                aria-autocomplete="list"
+                aria-controls="global-cwd-suggestions"
+                aria-expanded="false"
+                title="Directory to use for a new workstream. Type to see matching folders or browse."
+              />
+              <button
+                id="global-browse-button"
+                class="icon-button secondary-button"
+                type="button"
+                title="Browse for a working directory"
+                aria-label="Browse for a working directory"
+              >
+                <span class="button-icon" data-icon="folder" aria-hidden="true"></span>
+              </button>
+              <button
+                id="global-use-current-button"
+                class="icon-button secondary-button"
+                type="button"
+                title="Use selected workstream repo"
+                aria-label="Use selected workstream repo"
+              >
+                <span class="button-icon" data-icon="folder-input" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div id="global-cwd-suggestions" class="directory-suggestions hidden" role="listbox" aria-label="Directory suggestions"></div>
           </div>
+          <div class="launch-kind-control" role="radiogroup" aria-label="Tool to start">
+            <label>
+              <input id="global-launch-claude" type="radio" name="global-launch-kind" value="claude" checked />
+              <span><span class="button-icon" data-icon="bot" aria-hidden="true"></span>Claude</span>
+            </label>
+            <label>
+              <input id="global-launch-codex" type="radio" name="global-launch-kind" value="codex" />
+              <span><span class="button-icon" data-icon="code-2" aria-hidden="true"></span>Codex</span>
+            </label>
+            <label>
+              <input id="global-launch-shell" type="radio" name="global-launch-kind" value="shell" />
+              <span><span class="button-icon" data-icon="terminal" aria-hidden="true"></span>Shell</span>
+            </label>
+          </div>
+          <button id="new-workstream-button" type="button" title="Start Claude in this directory.">
+            <span class="button-icon" data-icon="bot" aria-hidden="true"></span>
+            <span class="button-label">Start Claude</span>
+          </button>
           <p id="global-launch-status" class="meta"></p>
         </section>
 
@@ -352,6 +395,14 @@
             <span>Newest first</span>
           </label>
         </div>
+      </section>
+      <section class="settings-section">
+        <p class="label">Workstream names</p>
+        <label class="settings-checkbox">
+          <input id="automatic-workstream-naming" type="checkbox" />
+          <span><strong>Automatically improve new names</strong></span>
+        </label>
+        <p class="meta">Runs the local Codex CLI after new workstreams are discovered. Off by default. Manual names are never overwritten.</p>
       </section>
       <section class="settings-section">
         <p class="label">Memory sharing</p>

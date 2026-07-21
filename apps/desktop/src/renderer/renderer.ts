@@ -18,10 +18,9 @@ type TerminalSessionRecord = Awaited<ReturnType<typeof window.gogoagent.terminal
 type SessionOrder = 'oldest-first' | 'newest-first'
 
 interface DirectoryCompletionState {
-  source: string
-  suffix: string
   completions: string[]
   index: number
+  kind: 'matches' | 'recent'
 }
 
 type IconName =
@@ -38,6 +37,7 @@ type IconName =
   | 'clipboard-paste'
   | 'code-2'
   | 'copy'
+  | 'folder'
   | 'folder-input'
   | 'lightbulb'
   | 'maximize-2'
@@ -65,6 +65,7 @@ const ICON_PATHS: Record<IconName, string> = {
   'clipboard-paste': '<path d="M15 2H9a1 1 0 0 0-1 1v2h8V3a1 1 0 0 0-1-1z"></path><path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"></path><path d="M16 4h2a2 2 0 0 1 2 2v7"></path><path d="M21 18h-8"></path><path d="m17 14 4 4-4 4"></path>',
   'code-2': '<path d="m18 16 4-4-4-4"></path><path d="m6 8-4 4 4 4"></path><path d="m14.5 4-5 16"></path>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>',
+  folder: '<path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>',
   'folder-input': '<path d="M2 6.5V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.7.9l.8 1.2a2 2 0 0 0 1.7.9H20a2 2 0 0 1 2 2v2"></path><path d="M2 13v5a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5"></path><path d="M12 10v8"></path><path d="m9 15 3 3 3-3"></path>',
   lightbulb: '<path d="M15 14c.2-1 .7-1.7 1.5-2.5A5 5 0 1 0 7.5 11.5C8.3 12.3 8.8 13 9 14"></path><path d="M9 18h6"></path><path d="M10 22h4"></path><path d="M10 18a2 2 0 0 1-1-1.7V14h6v2.3a2 2 0 0 1-1 1.7"></path>',
   'maximize-2': '<path d="M15 3h6v6"></path><path d="m21 3-7 7"></path><path d="M9 21H3v-6"></path><path d="m3 21 7-7"></path>',
@@ -104,13 +105,18 @@ function hydrateIconPlaceholders(root: ParentNode = document) {
 // ---------- DOM refs ----------
 const appNotice = document.querySelector('#app-notice') as HTMLElement
 const refreshButton = document.querySelector('#refresh-button') as HTMLButtonElement
+const labelWorkstreamsButton = document.querySelector('#label-workstreams-button') as HTMLButtonElement
+const labelWorkstreamsRetryButton = document.querySelector('#label-workstreams-retry-button') as HTMLButtonElement
 const labelWorkstreamsStatus = document.querySelector('#label-workstreams-status') as HTMLElement
 const projectsList = document.querySelector('#projects-list') as HTMLDivElement
 const projectsSearch = document.querySelector('#projects-search') as HTMLInputElement
 const showArchivedButton = document.querySelector('#show-archived-button') as HTMLButtonElement
 const globalCwdInput = document.querySelector('#global-cwd-input') as HTMLInputElement
+const globalCwdSuggestions = document.querySelector('#global-cwd-suggestions') as HTMLDivElement
+const globalBrowseButton = document.querySelector('#global-browse-button') as HTMLButtonElement
 const globalUseCurrentButton = document.querySelector('#global-use-current-button') as HTMLButtonElement
 const newWorkstreamButton = document.querySelector('#new-workstream-button') as HTMLButtonElement
+const globalLaunchKindInputs = [...document.querySelectorAll<HTMLInputElement>('input[name="global-launch-kind"]')]
 const globalLaunchStatus = document.querySelector('#global-launch-status') as HTMLElement
 const contentRoot = document.querySelector('.content') as HTMLElement
 const detailEmpty = document.querySelector('#project-detail-empty') as HTMLDivElement
@@ -158,6 +164,7 @@ const sessionOrderOldestInput = document.querySelector('#session-order-oldest') 
 const sessionOrderNewestInput = document.querySelector('#session-order-newest') as HTMLInputElement
 const contextClaudeToCodexInput = document.querySelector('#context-claude-to-codex') as HTMLInputElement
 const contextCodexToClaudeInput = document.querySelector('#context-codex-to-claude') as HTMLInputElement
+const automaticWorkstreamNamingInput = document.querySelector('#automatic-workstream-naming') as HTMLInputElement
 
 const debugToggle = document.querySelector('#debug-toggle') as HTMLButtonElement
 const debugDialog = document.querySelector('#debug-dialog') as HTMLDialogElement
@@ -206,12 +213,18 @@ let timelineLoadQueue: TimelineLoadTask[] = []
 let queuedTimelineSessionIds = new Set<string>()
 let projectSelectionVersion = 0
 let cwdCompletionState: DirectoryCompletionState | null = null
-let cwdCompletionInFlight = false
+let cwdCompletionTimer: number | null = null
+let cwdCompletionRequest = 0
+let globalLaunchInFlight = false
+let failedLabelProjectIds: string[] = []
 let transcriptVisibleMessageLimit = 0
 let transcriptSearchTimer: number | null = null
 
 const GLOBAL_CWD_STORAGE_KEY = 'gogoagent.globalCwd'
-const AUTO_NAME_SEEN_STORAGE_KEY = 'gogoagent.autoNameSeenWorkstreams.v4'
+const GLOBAL_CWD_RECENTS_STORAGE_KEY = 'gogoagent.recentCwds.v1'
+const GLOBAL_LAUNCH_KIND_STORAGE_KEY = 'gogoagent.launchKind.v1'
+const AUTO_NAME_SEEN_STORAGE_KEY = 'gogoagent.autoNameCompletedWorkstreams.v5'
+const AUTO_NAMING_ENABLED_STORAGE_KEY = 'gogoagent.autoNamingEnabled.v1'
 const SESSION_ORDER_STORAGE_KEY = 'gogoagent.sessionOrder.v1'
 const COLLAPSED_TIMELINE_SESSIONS_STORAGE_KEY = 'gogoagent.collapsedTimelineSessions.v1'
 const PINNED_WORKSTREAMS_STORAGE_KEY = 'gogoagent.pinnedWorkstreams.v1'
@@ -268,6 +281,7 @@ const pinnedWorkstreamIds = readStringSet(PINNED_WORKSTREAMS_STORAGE_KEY)
 const terminalFocusWorkstreamIds = readStringSet(TERMINAL_FOCUS_WORKSTREAMS_STORAGE_KEY)
 const statusNotesByWorkstream = readStringRecord(STATUS_NOTES_STORAGE_KEY)
 let contextSharingSettings = readContextSharingSettings()
+let automaticNamingEnabled = localStorage.getItem(AUTO_NAMING_ENABLED_STORAGE_KEY) === 'true'
 const unreadWorkstreamIds = new Set<string>()
 const projectActivityRenderedAt = new Map<string, number>()
 
@@ -361,6 +375,37 @@ function readStringRecord(storageKey: string) {
 
 function saveStringRecord(storageKey: string, values: Map<string, string>) {
   localStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(values)))
+}
+
+function readRecentDirectories() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(GLOBAL_CWD_RECENTS_STORAGE_KEY) ?? '[]') as unknown
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())).slice(0, 8)
+      : []
+  } catch {
+    return []
+  }
+}
+
+function rememberDirectory(directory: string) {
+  const normalized = directory.trim()
+  if (!normalized) return
+  const recent = [normalized, ...readRecentDirectories().filter((entry) => entry !== normalized)].slice(0, 8)
+  localStorage.setItem(GLOBAL_CWD_RECENTS_STORAGE_KEY, JSON.stringify(recent))
+}
+
+function selectedGlobalLaunchKind(): TerminalKind {
+  const selected = globalLaunchKindInputs.find((input) => input.checked)?.value
+  return selected === 'codex' || selected === 'shell' ? selected : 'claude'
+}
+
+function setGlobalLaunchKind(kind: TerminalKind) {
+  for (const input of globalLaunchKindInputs) input.checked = input.value === kind
+  localStorage.setItem(GLOBAL_LAUNCH_KIND_STORAGE_KEY, kind)
+  const label = terminalLabel(kind)
+  newWorkstreamButton.innerHTML = buttonContent(terminalKindIcon(kind), `Start ${label}`)
+  newWorkstreamButton.title = `Start ${label} in this directory.`
 }
 
 function readContextSharingSettings(): ContextSharingSettings {
@@ -1050,7 +1095,17 @@ function renderWorkstreamLaunchLabels(detail: ProjectDetail | null) {
 }
 
 function updateGlobalLaunchControls() {
-  globalUseCurrentButton.disabled = !currentDetail
+  globalCwdInput.disabled = globalLaunchInFlight
+  globalBrowseButton.disabled = globalLaunchInFlight
+  globalUseCurrentButton.disabled = globalLaunchInFlight || !currentDetail
+  newWorkstreamButton.disabled = globalLaunchInFlight
+  for (const input of globalLaunchKindInputs) input.disabled = globalLaunchInFlight
+}
+
+function renderLabelControls() {
+  labelWorkstreamsButton.disabled = labelJobInFlight
+  labelWorkstreamsRetryButton.disabled = labelJobInFlight
+  labelWorkstreamsRetryButton.classList.toggle('hidden', failedLabelProjectIds.length === 0)
 }
 
 function pathBasename(value: string) {
@@ -1540,11 +1595,12 @@ async function createTerminal(kind: TerminalKind) {
       })
       await openTerminalWorkstream(record)
       globalLaunchStatus.textContent = `Started ${label} in ${record.cwd}.`
+      return record
     } catch (error) {
       terminalStatus.textContent = `Launch failed: ${(error as Error).message}`
       globalLaunchStatus.textContent = `Launch failed: ${(error as Error).message}`
+      return null
     }
-    return
   }
 
   try {
@@ -1593,8 +1649,10 @@ async function createTerminal(kind: TerminalKind) {
           })
       }, 800)
     }
+    return record
   } catch (error) {
     terminalStatus.textContent = `Launch failed: ${(error as Error).message}`
+    return null
   }
 }
 
@@ -1629,81 +1687,198 @@ function showDraftWorkstream(view?: TerminalView) {
   updateGlobalLaunchControls()
 }
 
-function openNewWorkstreamDraft() {
-  const cwd = globalCwdInput.value.trim()
-  if (cwd) localStorage.setItem(GLOBAL_CWD_STORAGE_KEY, cwd)
-  else localStorage.removeItem(GLOBAL_CWD_STORAGE_KEY)
+function clearDirectorySuggestions() {
+  cwdCompletionRequest += 1
+  if (cwdCompletionTimer !== null) {
+    window.clearTimeout(cwdCompletionTimer)
+    cwdCompletionTimer = null
+  }
   cwdCompletionState = null
-  showDraftWorkstream()
-  globalLaunchStatus.textContent = cwd
-    ? `Draft workstream in ${cwd}.`
-    : 'Draft workstream using the default directory.'
+  globalCwdSuggestions.innerHTML = ''
+  globalCwdSuggestions.classList.add('hidden')
+  globalCwdInput.setAttribute('aria-expanded', 'false')
+  globalCwdInput.removeAttribute('aria-activedescendant')
+}
+
+function renderDirectorySuggestions() {
+  const state = cwdCompletionState
+  if (!state?.completions.length) {
+    clearDirectorySuggestions()
+    return
+  }
+
+  const heading = state.kind === 'recent' ? 'Recent directories' : 'Matching directories'
+  globalCwdSuggestions.innerHTML = [
+    `<div class="directory-suggestion-heading" role="presentation">${heading}</div>`,
+    ...state.completions.map((completion, index) => `
+      <button
+        id="global-cwd-suggestion-${index}"
+        class="directory-suggestion${index === state.index ? ' active' : ''}"
+        type="button"
+        role="option"
+        aria-selected="${index === state.index ? 'true' : 'false'}"
+        data-directory-index="${index}"
+        title="${esc(completion)}"
+      >${esc(completion)}</button>
+    `),
+  ].join('')
+  globalCwdSuggestions.classList.remove('hidden')
+  globalCwdInput.setAttribute('aria-expanded', 'true')
+  if (state.index >= 0) {
+    globalCwdInput.setAttribute('aria-activedescendant', `global-cwd-suggestion-${state.index}`)
+  } else {
+    globalCwdInput.removeAttribute('aria-activedescendant')
+  }
+
+  globalCwdSuggestions.querySelectorAll<HTMLButtonElement>('.directory-suggestion').forEach((button) => {
+    button.addEventListener('pointerdown', (event) => event.preventDefault())
+    button.addEventListener('click', () => acceptDirectorySuggestion(Number(button.dataset.directoryIndex)))
+  })
+}
+
+function showRecentDirectorySuggestions() {
+  const completions = readRecentDirectories()
+  if (!completions.length) {
+    clearDirectorySuggestions()
+    return
+  }
+  cwdCompletionState = {
+    completions,
+    index: -1,
+    kind: 'recent',
+  }
+  renderDirectorySuggestions()
+}
+
+async function refreshDirectorySuggestions() {
+  const source = globalCwdInput.value
+  if (!source.trim()) {
+    showRecentDirectorySuggestions()
+    return
+  }
+
+  const requestId = ++cwdCompletionRequest
+  try {
+    const response = await window.gogoagent.files.completeDirectory(source)
+    if (requestId !== cwdCompletionRequest || globalCwdInput.value !== source) return
+    const completions = [...new Set(response.completions)].filter(Boolean).slice(0, 12)
+    if (!completions.length) {
+      clearDirectorySuggestions()
+      return
+    }
+    cwdCompletionState = { completions, index: -1, kind: 'matches' }
+    renderDirectorySuggestions()
+  } catch {
+    if (requestId === cwdCompletionRequest) clearDirectorySuggestions()
+  }
+}
+
+function scheduleDirectorySuggestions() {
+  if (cwdCompletionTimer !== null) window.clearTimeout(cwdCompletionTimer)
+  cwdCompletionTimer = window.setTimeout(() => {
+    cwdCompletionTimer = null
+    void refreshDirectorySuggestions()
+  }, 140)
+}
+
+function moveDirectorySuggestion(delta: number) {
+  const state = cwdCompletionState
+  if (!state?.completions.length) return false
+  state.index = state.index < 0
+    ? delta > 0 ? 0 : state.completions.length - 1
+    : (state.index + delta + state.completions.length) % state.completions.length
+  renderDirectorySuggestions()
+  globalCwdSuggestions.querySelector<HTMLElement>(`#global-cwd-suggestion-${state.index}`)?.scrollIntoView({ block: 'nearest' })
+  return true
+}
+
+function acceptDirectorySuggestion(index = cwdCompletionState?.index ?? -1) {
+  const state = cwdCompletionState
+  if (!state?.completions.length) return false
+  const selectedIndex = index >= 0 ? index : 0
+  const completion = state.completions[selectedIndex]
+  if (!completion) return false
+  globalCwdInput.value = completion
+  globalCwdInput.setAttribute('aria-invalid', 'false')
+  clearDirectorySuggestions()
+  globalLaunchStatus.textContent = 'Directory selected. Choose a tool, then start.'
+  return true
 }
 
 function useCurrentProjectForGlobalLaunch() {
   if (!currentDetail) return
   globalCwdInput.value = currentDetail.project.repoRoot
   localStorage.setItem(GLOBAL_CWD_STORAGE_KEY, currentDetail.project.repoRoot)
-  cwdCompletionState = null
-  globalLaunchStatus.textContent = 'Using selected workstream repo.'
+  globalCwdInput.setAttribute('aria-invalid', 'false')
+  clearDirectorySuggestions()
+  globalLaunchStatus.textContent = 'Using the selected workstream repo. Choose a tool, then start.'
 }
 
-function activeCwdCompletionState() {
-  if (!cwdCompletionState) return null
-  const completion = cwdCompletionState.completions[cwdCompletionState.index]
-  const cursor = globalCwdInput.selectionStart ?? globalCwdInput.value.length
-  const selectionEnd = globalCwdInput.selectionEnd ?? cursor
-  if (!completion || cursor !== selectionEnd) return null
-  if (cursor !== completion.length) return null
-  if (globalCwdInput.value !== `${completion}${cwdCompletionState.suffix}`) return null
-  return cwdCompletionState
-}
-
-async function cycleGlobalCwdCompletion(reverse = false) {
-  if (cwdCompletionInFlight) return
-
-  let state = activeCwdCompletionState()
-  if (!state) {
-    const value = globalCwdInput.value
-    const cursor = globalCwdInput.selectionStart ?? value.length
-    const selectionEnd = globalCwdInput.selectionEnd ?? cursor
-    const source = value.slice(0, cursor)
-    const suffix = value.slice(selectionEnd)
-
-    cwdCompletionState = null
-    cwdCompletionInFlight = true
-    try {
-      const response = await window.gogoagent.files.completeDirectory(source)
-      const completions = [...new Set(response.completions)].filter(Boolean)
-      if (!completions.length) {
-        globalLaunchStatus.textContent = response.error ? `No matching directories.` : 'No matching directories.'
-        return
-      }
-      state = {
-        source,
-        suffix,
-        completions,
-        index: reverse ? completions.length : -1,
-      }
-    } catch (error) {
-      globalLaunchStatus.textContent = `Completion failed: ${(error as Error).message}`
-      return
-    } finally {
-      cwdCompletionInFlight = false
+async function browseForGlobalDirectory() {
+  try {
+    let defaultPath: string | undefined
+    const input = globalCwdInput.value.trim()
+    if (input) {
+      const inspected = await window.gogoagent.files.inspectDirectory(input)
+      if (inspected.exists && inspected.isDirectory) defaultPath = inspected.path
     }
+    defaultPath ??= currentDetail?.project.repoRoot
+
+    const selected = await window.gogoagent.files.selectDirectory(defaultPath)
+    if (!selected) return
+    globalCwdInput.value = selected
+    globalCwdInput.setAttribute('aria-invalid', 'false')
+    localStorage.setItem(GLOBAL_CWD_STORAGE_KEY, selected)
+    clearDirectorySuggestions()
+    globalLaunchStatus.textContent = 'Directory selected. Choose a tool, then start.'
+  } catch (error) {
+    globalLaunchStatus.textContent = `Could not open folder picker: ${(error as Error).message}`
   }
+}
 
-  state.index = (state.index + (reverse ? -1 : 1) + state.completions.length) % state.completions.length
-  const completion = state.completions[state.index]
-  globalCwdInput.value = `${completion}${state.suffix}`
-  globalCwdInput.setSelectionRange(completion.length, completion.length)
+async function startGlobalWorkstream() {
+  if (globalLaunchInFlight) return
+  const kind = selectedGlobalLaunchKind()
+  const label = terminalLabel(kind)
+  globalLaunchInFlight = true
+  updateGlobalLaunchControls()
+  clearDirectorySuggestions()
+  globalCwdInput.setAttribute('aria-invalid', 'false')
+  globalLaunchStatus.textContent = 'Checking directory...'
 
-  if (state.completions.length > 1) {
-    cwdCompletionState = state
-    globalLaunchStatus.textContent = `${state.index + 1}/${state.completions.length} directory matches.`
-  } else {
-    cwdCompletionState = null
-    globalLaunchStatus.textContent = 'Completed directory.'
+  try {
+    const inspected = await window.gogoagent.files.inspectDirectory(globalCwdInput.value)
+    if (inspected.error) {
+      globalCwdInput.setAttribute('aria-invalid', 'true')
+      globalLaunchStatus.textContent = `Cannot use directory: ${inspected.error}`
+      globalCwdInput.focus()
+      return
+    }
+    if (!inspected.exists) {
+      globalCwdInput.setAttribute('aria-invalid', 'true')
+      globalLaunchStatus.textContent = `Directory not found: ${inspected.path}`
+      globalCwdInput.focus()
+      return
+    }
+    if (!inspected.isDirectory) {
+      globalCwdInput.setAttribute('aria-invalid', 'true')
+      globalLaunchStatus.textContent = `Not a directory: ${inspected.path}`
+      globalCwdInput.focus()
+      return
+    }
+    globalCwdInput.value = inspected.path
+    localStorage.setItem(GLOBAL_CWD_STORAGE_KEY, inspected.path)
+    globalLaunchStatus.textContent = `Starting ${label} in ${inspected.path}...`
+    showDraftWorkstream()
+    const record = await createTerminal(kind)
+    if (record) rememberDirectory(record.cwd)
+  } catch (error) {
+    globalCwdInput.setAttribute('aria-invalid', 'true')
+    globalLaunchStatus.textContent = `Could not start ${label}: ${(error as Error).message}`
+  } finally {
+    globalLaunchInFlight = false
+    updateGlobalLaunchControls()
+    if (globalCwdInput.getAttribute('aria-invalid') === 'true') globalCwdInput.focus()
   }
 }
 
@@ -1995,6 +2170,11 @@ function renderProjectsList() {
       const unread = unreadWorkstreamIds.has(project.id)
       const statusNote = workstreamStatusNote(project.id)
       const branch = project.branch ? `<span class="badge subtle">${esc(project.branch)}</span>` : ''
+      const nameOrigin = project.nameSource === 'generated'
+        ? '<span class="badge name-origin-badge generated" title="Generated by local Codex; edit the name to make it manual.">Generated</span>'
+        : project.nameSource === 'manual'
+          ? '<span class="badge name-origin-badge" title="Saved manually; automatic naming will not overwrite it.">Manual</span>'
+          : ''
       const liveCount = project.activeTerminalIds?.length ?? 0
       const needsInputIds = projectNeedsInputTerminalIds(project)
       const needsInputCount = needsInputIds.length
@@ -2013,7 +2193,10 @@ function renderProjectsList() {
       return `
         <div class="project-card${selected}${project.archivedAt ? ' archived' : ''}${pinned ? ' pinned' : ''}${unread ? ' unread' : ''}" data-project-id="${esc(project.id)}" role="button" tabindex="0" title="Open ${esc(project.name)}. Last active ${esc(lastActive)}. ${esc(project.repoRoot)}.">
           <span class="project-card-title-row">
-            <span class="session-card-title">${esc(project.name)}</span>
+            <span class="project-title-with-origin">
+              <span class="session-card-title">${esc(project.name)}</span>
+              ${nameOrigin}
+            </span>
             <span class="project-card-controls">
               <button class="project-pin-button icon-button secondary-button${pinned ? ' pinned' : ''}" type="button" data-pin-project-id="${esc(project.id)}" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinned ? 'true' : 'false'}">
                 ${iconMarkup('pin')}
@@ -2092,6 +2275,7 @@ function syncProjectFromDetail(project: Project) {
   }
   if (
     existing.name === project.name &&
+    existing.nameSource === project.nameSource &&
     existing.repoRoot === project.repoRoot &&
     existing.branch === project.branch &&
     existing.sessionCount === project.sessionCount &&
@@ -2242,7 +2426,15 @@ function renderDetail(detail: ProjectDetail) {
   terminalHelp.textContent = ''
   renderWorkstreamLaunchLabels(detail)
   detailTitle.textContent = project.name
-  detailSubtitle.textContent = project.archivedAt ? 'Archived workstream' : project.draft ? 'Draft workstream' : 'Workstream'
+  const nameOrigin = project.nameSource === 'generated'
+    ? 'Generated name'
+    : project.nameSource === 'manual'
+      ? 'Manual name'
+      : undefined
+  detailSubtitle.textContent = [
+    project.archivedAt ? 'Archived workstream' : project.draft ? 'Draft workstream' : 'Workstream',
+    nameOrigin,
+  ].filter(Boolean).join(' · ')
   renderDetailMeta(project)
   applyTerminalFocus(project)
   archiveWorkstreamButton.innerHTML = iconMarkup(project.archivedAt ? 'archive-restore' : 'archive')
@@ -2851,6 +3043,7 @@ function renderSettingsControls() {
   sessionOrderNewestInput.checked = sessionOrder === 'newest-first'
   contextClaudeToCodexInput.checked = contextSharingSettings.claudeToCodex
   contextCodexToClaudeInput.checked = contextSharingSettings.codexToClaude
+  automaticWorkstreamNamingInput.checked = automaticNamingEnabled
   renderTimelineOrderButton()
 }
 
@@ -2866,6 +3059,18 @@ function setContextSharing(patch: Partial<ContextSharingSettings>) {
   contextSharingSettings = { ...contextSharingSettings, ...patch }
   saveContextSharingSettings()
   renderSettingsControls()
+}
+
+function setAutomaticNamingEnabled(enabled: boolean) {
+  automaticNamingEnabled = enabled
+  localStorage.setItem(AUTO_NAMING_ENABLED_STORAGE_KEY, String(enabled))
+  renderSettingsControls()
+  if (enabled) {
+    labelWorkstreamsStatus.textContent = 'Automatic naming enabled. Checking new workstreams...'
+    autoNameNewWorkstreams()
+  } else if (!labelJobInFlight) {
+    labelWorkstreamsStatus.textContent = 'Automatic naming is off. Use Improve names whenever you want it.'
+  }
 }
 
 function normalizeResumeMessageText(text: string) {
@@ -3463,12 +3668,16 @@ function writeAutoNameSeenWorkstreams(ids: Set<string>) {
 }
 
 function autoNameNewWorkstreams() {
+  if (!automaticNamingEnabled) return
   if (showArchivedWorkstreams) return
   if (labelJobInFlight || projects.length === 0) return
 
   const seen = readAutoNameSeenWorkstreams()
   const labelableProjects = projects.filter((project) => !project.draft && project.sessionCount > 0)
-  const newProjectIds = labelableProjects.map((project) => project.id).filter((id) => !seen.has(id))
+  const failed = new Set(failedLabelProjectIds)
+  const newProjectIds = labelableProjects
+    .map((project) => project.id)
+    .filter((id) => !seen.has(id) && !failed.has(id))
   if (newProjectIds.length === 0) return
 
   void labelWorkstreamNames({ projectIds: newProjectIds, automatic: true })
@@ -3480,34 +3689,34 @@ async function labelWorkstreamNames(options: { projectIds?: string[]; automatic?
     return
   }
 
-  const targetProjectIds = options.projectIds ?? filterProjects().map((project) => project.id)
+  const targetProjectIds = options.projectIds ?? filterProjects()
+    .filter((project) => !project.draft && project.sessionCount > 0)
+    .map((project) => project.id)
   if (!targetProjectIds.length) {
-    if (!options.automatic) labelWorkstreamsStatus.textContent = 'No workstreams to label.'
+    if (!options.automatic) labelWorkstreamsStatus.textContent = 'No workstreams with history to name.'
     return
   }
 
   labelJobInFlight = true
+  renderLabelControls()
   labelWorkstreamsStatus.textContent = options.automatic
     ? `Naming ${targetProjectIds.length} new workstream${targetProjectIds.length === 1 ? '' : 's'}...`
-    : 'Starting label job...'
+    : `Improving ${targetProjectIds.length} workstream name${targetProjectIds.length === 1 ? '' : 's'} with local Codex...`
   try {
     const job = await window.gogoagent.workstreams.label({ projectIds: targetProjectIds })
-    if (options.automatic) {
-      const seen = readAutoNameSeenWorkstreams()
-      for (const projectId of targetProjectIds) seen.add(projectId)
-      writeAutoNameSeenWorkstreams(seen)
-    }
-    pollLabelJob(job.jobId, { automatic: options.automatic })
+    pollLabelJob(job.jobId, { automatic: options.automatic, targetProjectIds })
   } catch (error) {
     const message = (error as Error).message
     labelWorkstreamsStatus.textContent = message.includes('/workstreams/label -> 404')
       ? 'Labeling route is missing from the running sidecar. Restart gogoagent so the sidecar picks up the latest code.'
       : `Labeling failed to start: ${message}`
+    failedLabelProjectIds = [...targetProjectIds]
     labelJobInFlight = false
+    renderLabelControls()
   }
 }
 
-function pollLabelJob(jobId: string, options: { automatic?: boolean } = {}) {
+function pollLabelJob(jobId: string, options: { automatic?: boolean; targetProjectIds: string[] }) {
   if (labelPollTimer !== null) window.clearTimeout(labelPollTimer)
   const tick = async () => {
     try {
@@ -3515,8 +3724,25 @@ function pollLabelJob(jobId: string, options: { automatic?: boolean } = {}) {
       const statusText = describeLabelJob(job)
       labelWorkstreamsStatus.textContent = statusText
       if (job.state === 'done' || job.state === 'error') {
+        const targetSet = new Set(options.targetProjectIds)
+        const reportedFailures = new Set(
+          job.errors.map((error) => error.sessionId).filter((id) => targetSet.has(id)),
+        )
+        const wholeJobFailed = job.state === 'error' && (
+          job.errors.some((error) => error.sessionId === '*') || reportedFailures.size === 0
+        )
+        const completedIds = wholeJobFailed
+          ? []
+          : options.targetProjectIds.filter((id) => !reportedFailures.has(id))
+        const seen = readAutoNameSeenWorkstreams()
+        for (const projectId of completedIds) seen.add(projectId)
+        writeAutoNameSeenWorkstreams(seen)
+        failedLabelProjectIds = wholeJobFailed
+          ? [...options.targetProjectIds]
+          : options.targetProjectIds.filter((id) => reportedFailures.has(id))
         labelJobInFlight = false
         labelPollTimer = null
+        renderLabelControls()
         await window.gogoagent.debug.rescan()
         await loadAllProjects()
         labelWorkstreamsStatus.textContent = statusText
@@ -3530,8 +3756,10 @@ function pollLabelJob(jobId: string, options: { automatic?: boolean } = {}) {
       labelPollTimer = window.setTimeout(tick, 1500)
     } catch (error) {
       labelWorkstreamsStatus.textContent = `Label polling failed: ${(error as Error).message}`
+      failedLabelProjectIds = [...options.targetProjectIds]
       labelJobInFlight = false
       labelPollTimer = null
+      renderLabelControls()
     }
   }
   labelPollTimer = window.setTimeout(tick, 500)
@@ -3587,6 +3815,7 @@ async function rescan() {
 // ---------- Boot ----------
 hydrateIconPlaceholders()
 renderSettingsControls()
+renderLabelControls()
 
 async function toggleArchivedWorkstreams() {
   showArchivedWorkstreams = !showArchivedWorkstreams
@@ -3633,22 +3862,55 @@ showArchivedButton.addEventListener('click', () => void toggleArchivedWorkstream
 timelineToggleAllButton.addEventListener('click', () => toggleAllTimelineSessions())
 detailTimeline.addEventListener('click', handleTimelineClick)
 globalCwdInput.value = localStorage.getItem(GLOBAL_CWD_STORAGE_KEY) ?? ''
+const storedLaunchKind = localStorage.getItem(GLOBAL_LAUNCH_KIND_STORAGE_KEY)
+setGlobalLaunchKind(storedLaunchKind === 'codex' || storedLaunchKind === 'shell' ? storedLaunchKind : 'claude')
 globalCwdInput.addEventListener('keydown', (event) => {
-  if (event.key !== 'Tab' || event.altKey || event.ctrlKey || event.metaKey) return
-  event.preventDefault()
-  void cycleGlobalCwdCompletion(event.shiftKey)
+  if (event.altKey || event.ctrlKey || event.metaKey) return
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    if (moveDirectorySuggestion(event.key === 'ArrowDown' ? 1 : -1)) event.preventDefault()
+    return
+  }
+  if (event.key === 'Tab' && cwdCompletionState?.completions.length) {
+    event.preventDefault()
+    acceptDirectorySuggestion()
+    return
+  }
+  if (event.key === 'Escape') {
+    clearDirectorySuggestions()
+    return
+  }
+  if (event.key === 'Enter' && !event.isComposing) {
+    event.preventDefault()
+    if ((cwdCompletionState?.index ?? -1) >= 0) acceptDirectorySuggestion()
+    else void startGlobalWorkstream()
+  }
 })
 globalCwdInput.addEventListener('input', () => {
-  cwdCompletionState = null
+  globalCwdInput.setAttribute('aria-invalid', 'false')
+  globalLaunchStatus.textContent = ''
+  clearDirectorySuggestions()
+  scheduleDirectorySuggestions()
 })
-globalCwdInput.addEventListener('change', () => {
-  const cwd = globalCwdInput.value.trim()
-  if (cwd) localStorage.setItem(GLOBAL_CWD_STORAGE_KEY, cwd)
-  else localStorage.removeItem(GLOBAL_CWD_STORAGE_KEY)
-  cwdCompletionState = null
+globalCwdInput.addEventListener('focus', () => {
+  if (readRecentDirectories().length > 0) showRecentDirectorySuggestions()
+  else scheduleDirectorySuggestions()
 })
+globalCwdInput.addEventListener('blur', () => window.setTimeout(clearDirectorySuggestions, 120))
+globalBrowseButton.addEventListener('click', () => void browseForGlobalDirectory())
 globalUseCurrentButton.addEventListener('click', () => useCurrentProjectForGlobalLaunch())
-newWorkstreamButton.addEventListener('click', () => openNewWorkstreamDraft())
+for (const input of globalLaunchKindInputs) {
+  input.addEventListener('change', () => {
+    if (input.checked) setGlobalLaunchKind(input.value as TerminalKind)
+  })
+}
+newWorkstreamButton.addEventListener('click', () => void startGlobalWorkstream())
+labelWorkstreamsButton.addEventListener('click', () => void labelWorkstreamNames())
+labelWorkstreamsRetryButton.addEventListener('click', () => {
+  const projectIds = [...failedLabelProjectIds]
+  failedLabelProjectIds = []
+  renderLabelControls()
+  void labelWorkstreamNames({ projectIds })
+})
 refineButton.addEventListener('click', () => void runRefine())
 newShellButton.addEventListener('click', () => void createTerminal('shell'))
 newClaudeButton.addEventListener('click', () => void activateOrCreateAgentTerminal('claude'))
@@ -3746,6 +4008,9 @@ contextClaudeToCodexInput.addEventListener('change', () => {
 })
 contextCodexToClaudeInput.addEventListener('change', () => {
   setContextSharing({ codexToClaude: contextCodexToClaudeInput.checked })
+})
+automaticWorkstreamNamingInput.addEventListener('change', () => {
+  setAutomaticNamingEnabled(automaticWorkstreamNamingInput.checked)
 })
 timelineOrderButton.addEventListener('click', () => {
   setSessionOrder(sessionOrder === 'oldest-first' ? 'newest-first' : 'oldest-first')

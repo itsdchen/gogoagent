@@ -1,5 +1,6 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { readFileSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { get as httpGet } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -41,12 +42,42 @@ type TerminalClosedPayload = { id: string }
 
 const port = Number(process.env.GOGOAGENT_PORT ?? 43111)
 const baseUrl = `http://127.0.0.1:${port}`
+const SELECT_DIRECTORY_CHANNEL = 'gogoagent:select-directory'
 const authTokenPath = process.env.GOGOAGENT_AUTH_TOKEN_FILE
   ?? path.join(os.homedir(), '.gogoagent', `sidecar-${port}.token`)
 function readAuthToken() {
   const token = readFileSync(authTokenPath, 'utf8').trim()
   if (!token) throw new Error(`gogoagent sidecar authentication token is empty: ${authTokenPath}`)
   return token
+}
+
+function resolveDirectoryInput(input: string) {
+  const trimmed = input.trim()
+  if (!trimmed || trimmed === '~') return os.homedir()
+  if (trimmed.startsWith('~/')) return path.resolve(os.homedir(), trimmed.slice(2))
+  return path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(os.homedir(), trimmed)
+}
+
+async function inspectDirectory(input: string) {
+  const resolvedPath = resolveDirectoryInput(input)
+  try {
+    const details = await stat(resolvedPath)
+    return {
+      input,
+      path: resolvedPath,
+      exists: true,
+      isDirectory: details.isDirectory(),
+    }
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : undefined
+    return {
+      input,
+      path: resolvedPath,
+      exists: false,
+      isDirectory: false,
+      error: code === 'ENOENT' ? undefined : error instanceof Error ? error.message : String(error),
+    }
+  }
 }
 
 let authToken = readAuthToken()
@@ -246,6 +277,9 @@ contextBridge.exposeInMainWorld('gogoagent', {
   files: {
     completeDirectory: (input: string) =>
       requestJson<{ input: string; completions: string[]; error?: string }>(`/fs/complete-directory?input=${encodeURIComponent(input)}`),
+    inspectDirectory,
+    selectDirectory: (defaultPath?: string) =>
+      ipcRenderer.invoke(SELECT_DIRECTORY_CHANNEL, defaultPath) as Promise<string | null>,
   },
   debug: {
     getState: getDebugState,

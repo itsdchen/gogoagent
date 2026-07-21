@@ -1,128 +1,184 @@
 # gogoagent
 
-Local-first organizer for Claude Code session history, threads, work locations, and extracted lessons.
+gogoagent is a local-first desktop console for recovering context from Claude
+Code history and running long-lived Claude, Codex, or shell workstreams.
 
-## What it is
+It discovers work already on your machine, groups related sessions into
+workstreams, keeps live terminals attached to those workstreams, and helps you
+see what needs attention without sending your history to a hosted service.
 
-gogoagent is a local desktop app + sidecar service for exploring Claude Code work that already happened on your machine.
+> **Project status:** gogoagent currently runs from source as a development
+> app. There is no packaged installer yet. It is developed primarily on Linux.
 
-Current focus:
+## Quick start
 
-- discover Claude Code sessions from local artifacts in `~/.claude`
-- group them into projects and thread-like clusters
-- surface where Claude has worked (`worked here` / work locations)
-- search transcripts
-- launch and own live shell/Claude/Codex terminal sessions
-- persist and index owned terminal logs
-- label workstreams with cached LLM-generated names
-- extract summaries, rules, todos, and lessons from corrections
+### 1. Install the prerequisites
 
-It is starting to become a local control plane, but the core model is still local-first recovery, context, and workstream memory.
+Required:
 
-## Current architecture
+- Git and Bash
+- Node.js 20 or newer
+- Corepack, which is included with standard Node.js distributions
 
-This repo is a small pnpm workspace:
+Optional:
 
-```text
-apps/
-  desktop/         Electron app
-services/
-  sidecar/         local discovery + parsing backend
-packages/
-  shared/          shared types
-```
+- the `claude` CLI on `PATH` if you want to launch Claude Code
+- the `codex` CLI on `PATH` if you want to launch Codex, improve workstream
+  names, or extract lessons
 
-## What the app reads
-
-gogoagent currently discovers Claude activity from local files such as:
-
-- `~/.claude/projects/**/*.jsonl`
-- `~/.claude/history.jsonl`
-- `~/.claude/sessions/*.json`
-- `~/.claude/todos/*.json`
-- `~/.gogoagent/terminal-logs/*.json`
-- `~/.gogoagent/terminal-logs/*.ansi.log`
-
-It should **not** ingest Claude credentials or auth material.
-
-Set `GOGOAGENT_TERMINAL_LOG_DIR` to override the terminal-log directory for both the desktop app and sidecar.
-
-Live terminals can be started two ways:
-
-- from a selected workstream, which hard-attaches the terminal log back to that workstream
-- from the sidebar "Start anywhere" launcher, which starts unattached from the chosen directory and indexes later into a fresh workstream by repo, branch, and time
-
-## Startup and indexing
-
-On first scan, the sidecar parses Claude JSONL transcripts and writes a local parse cache at:
-
-- `~/.gogoagent/cache/transcripts-v2.json`
-
-Later scans reuse cached transcripts when the file path, size, modified time, and dependent Claude metadata still match. This keeps repeat launches from reparsing unchanged history. `POST /debug/rescan` still forces a fresh snapshot walk, but valid transcript parse cache entries are reused.
-
-Set `GOGOAGENT_SNAPSHOT_CACHE_MS` to tune the short in-memory snapshot de-dupe window. The default is `1000` ms.
-
-Durable user-visible state is stored under:
-
-- `~/.gogoagent/state/title-overrides.json`
-- `~/.gogoagent/state/workstream-labels.json`
-- `~/.gogoagent/state/workstream-archive.json`
-- `~/.gogoagent/state/refined-lessons.json`
-
-On first use, older copies of these files under `~/.cache/gogoagent` are
-copied into the state directory without deleting the originals. Set
-`GOGOAGENT_STATE_DIR` to override the state directory. Regenerable caches and
-legacy auto-title fallbacks remain under `~/.cache/gogoagent`.
-
-Use the sidebar naming action to generate or refresh workstream labels.
-Labeling runs through the local `codex` CLI, deduplicates identical active
-jobs, and skips workstreams whose saved label is still current.
-
-## Prereqs
-
-- Node 20+
-- `corepack` available
-- pnpm via corepack
-
-## Install
-
-The first launch can bootstrap itself. From the repo root, run:
+Check the required runtime with:
 
 ```bash
+node --version
+corepack --version
+```
+
+On Linux, compiling the terminal dependency may also require Python and your
+distribution's standard C/C++ build tools.
+
+### 2. Clone and launch
+
+```bash
+git clone https://github.com/itsdchen/gogoagent.git
+cd gogoagent
 ./start.sh
 ```
 
-If workspace dependencies, `node-pty`'s native module, or Electron's application
-binary are missing, the script installs or repairs them before launching. On
-Linux, building `node-pty` needs standard C/C++ build tools and Python. If that
-build reports a compiler error, install your distribution's development-tool
-package and Python, then rerun `./start.sh`.
+That one launcher is the normal way to start gogoagent. On the first run it:
 
-To prepare and verify dependencies without launching the app:
+1. checks Node.js and Corepack;
+2. installs missing workspace dependencies;
+3. repairs Electron or `node-pty` when their native files are missing;
+4. builds the desktop app;
+5. starts or safely reuses the local sidecar; and
+6. opens the Electron window.
+
+The first run needs network access to download dependencies and may take a few
+minutes. To prepare and verify everything without opening the app, run:
 
 ```bash
 ./start.sh --check
 ```
 
-The equivalent manual installation command is:
+### 3. Start using it
+
+On first launch:
+
+- Existing Claude Code history under `~/.claude` should appear automatically.
+- An empty workstream list is normal if there is no Claude history yet.
+- To start fresh, choose or browse to a directory under **Start a workstream**,
+  choose **Claude**, **Codex**, or **Shell**, and press the Start button.
+- Use **Improve names** when you want local Codex to generate clearer labels.
+  Automatic naming is off by default and can be enabled in Settings.
+- Open **Debug** if discovery or indexing does not look right.
+
+Generated and manually edited workstream names are identified in the UI.
+Manual names are never overwritten by automatic naming.
+
+## What gogoagent does
+
+- Discovers local Claude Code sessions and transcripts.
+- Groups related sessions by repository, branch, and time into workstreams.
+- Shows timelines, transcript excerpts, work locations, and extracted lessons.
+- Launches and owns live Claude, Codex, and shell terminals.
+- Preserves terminal logs and attaches them to workstreams.
+- Highlights terminals that appear to be waiting for user input.
+- Searches transcript messages.
+- Archives, pins, renames, and labels workstreams.
+
+The app is a local context and operations console, not a hosted collaboration
+service or general task manager.
+
+## Local data and privacy
+
+gogoagent reads local development artifacts such as:
+
+- `~/.claude/projects/**/*.jsonl`
+- `~/.claude/history.jsonl`
+- `~/.claude/sessions/*.json`
+- `~/.claude/todos/*.json`
+- `~/.gogoagent/terminal-logs/*`
+
+It does not intentionally read Claude credentials or authentication material.
+The sidecar listens only on `127.0.0.1` and protects every route except its
+health check with a per-run token that is not exposed to the renderer.
+
+gogoagent writes its own data under:
+
+- `~/.gogoagent/terminal-logs/` — terminal metadata and output
+- `~/.gogoagent/cache/` — regenerable transcript parse data
+- `~/.gogoagent/state/` — names, archives, and refined lessons
+- `~/.cache/gogoagent/` — legacy/regenerable caches retained for migration
+
+Older durable state under `~/.cache/gogoagent` is copied into
+`~/.gogoagent/state` on first use without deleting the original files.
+
+Useful overrides:
+
+- `GOGOAGENT_STATE_DIR`
+- `GOGOAGENT_CACHE_DIR`
+- `GOGOAGENT_TERMINAL_LOG_DIR`
+- `GOGOAGENT_PORT`
+
+## Startup and terminal lifecycle
+
+The default sidecar address is `http://127.0.0.1:43111`.
+
+`./start.sh` reuses a healthy gogoagent sidecar on that port. It never silently
+switches to another port, because doing so would make the first sidecar's live
+terminals disappear from the new window.
+
+Closing the Electron window may intentionally leave the sidecar running so
+live terminal sessions survive a frontend restart. Pressing Ctrl+C in the
+terminal that launched gogoagent stops Electron and any sidecar started by that
+command.
+
+To run a separate instance, select another port explicitly:
 
 ```bash
-corepack pnpm install
+GOGOAGENT_PORT=43112 ./start.sh
 ```
 
-If an automatic repair fails, the underlying commands are:
+To rebuild and reopen only the frontend while keeping a running sidecar:
+
+```bash
+./start.sh --frontend
+```
+
+## Troubleshooting startup
+
+### Node.js is unsupported
+
+Install Node.js 20 or newer, confirm `node --version`, and rerun `./start.sh`.
+Do not reuse `node_modules` copied from another repository or Node.js version;
+the launcher will install the workspace's own dependencies.
+
+### Corepack or pnpm cannot run
+
+Try:
+
+```bash
+corepack enable
+corepack pnpm install
+./start.sh
+```
+
+### `node-pty` cannot load `pty.node`
+
+Rerun `./start.sh`; it detects and rebuilds the missing native module. If the
+rebuild reports a compiler error, install Python and your distribution's
+development/build-tools package, then rerun the launcher.
+
+The underlying repair command is:
 
 ```bash
 corepack pnpm rebuild node-pty
-node node_modules/.pnpm/electron@*/node_modules/electron/install.js
 ```
 
-### Linux sandbox permissions
+### Electron's Linux sandbox helper is misconfigured
 
-On Linux, Electron's `chrome-sandbox` helper must be owned by root and
-setuid (mode 4755). If you see a fatal error like
-`The SUID sandbox helper binary was found, but is not configured correctly`,
-fix the permissions on the installed binary:
+If Electron reports that `chrome-sandbox` must be owned by root with mode
+`4755`, run from the repository root:
 
 ```bash
 SANDBOX=$(ls node_modules/.pnpm/electron@*/node_modules/electron/dist/chrome-sandbox)
@@ -130,169 +186,108 @@ sudo chown root:root "$SANDBOX"
 sudo chmod 4755 "$SANDBOX"
 ```
 
-You will need to redo this any time Electron is reinstalled.
+Electron reinstalls can require repeating this fix.
 
-## Run the app
+### Port 43111 is occupied
 
-### Easiest way: start the desktop app
+If the listener is a healthy gogoagent sidecar, `./start.sh` reuses it. If it is
+another process, inspect it before stopping anything:
 
 ```bash
-./start.sh
+lsof -nP -iTCP:43111 -sTCP:LISTEN
+pgrep -af 'tsx.*src/index.ts|services/sidecar|gogoagent'
 ```
 
-This is the main command to use right now. It checks the installed Node.js,
-pnpm, Electron, and native terminal dependency before launching, then tells
-you how to correct any missing prerequisite.
+To stop the listener after confirming it is safe to do so:
 
-It should:
+```bash
+lsof -tiTCP:43111 -sTCP:LISTEN | xargs -r kill
+```
 
-- build the desktop app pieces
-- start the sidecar in dev mode
-- launch the Electron UI
+Stopping a gogoagent sidecar ends its live terminals. Alternatively, run a
+separate instance on an explicit unused port.
 
-Pressing Ctrl+C stops Electron and any sidecar started by that command. A
-sidecar reused from an earlier launch stays running. Closing the Electron
-window can also leave the sidecar running so live terminal sessions survive
-app window restarts.
+### Previously visible workstreams appear to be gone
 
-The launcher reuses a healthy sidecar on the selected port. It never switches
-to another port automatically, because doing so would make the first sidecar's
-live terminals disappear from the new window. To run a separate instance,
-choose the port explicitly, for example `GOGOAGENT_PORT=43112 ./start.sh`.
+First confirm that the new window is using the same sidecar port and the same
+user account/home directory. Live PTYs belong to one sidecar process; a window
+connected to another port will not see them. Durable names, archives, lessons,
+and terminal logs live under `~/.gogoagent` and should survive restarts.
 
-### Run only the sidecar
+Use the app's **Debug** dialog to inspect discovery paths and recent scan
+errors. Avoid deleting `~/.gogoagent` or `~/.cache/gogoagent` while diagnosing
+missing data.
+
+### Claude or Codex immediately exits
+
+Confirm the corresponding CLI is installed, authenticated, and available in
+the same shell that starts gogoagent:
+
+```bash
+claude --version
+codex --version
+```
+
+The built-in shell launcher can still be used when neither agent CLI is
+installed.
+
+## Architecture
+
+This repository is a pnpm workspace:
+
+```text
+apps/
+  desktop/         Electron main process, preload bridge, and renderer
+services/
+  sidecar/         loopback API, discovery/indexing, PTYs, and local state
+packages/
+  shared/          shared TypeScript types
+scripts/           smoke tests and developer utilities
+```
+
+The sidecar owns live PTYs. The preload exposes narrow, named operations to the
+renderer and keeps the sidecar authentication token outside renderer code.
+
+See [DEVELOPMENT.md](./DEVELOPMENT.md) and [AGENTS.md](./AGENTS.md) before
+making non-trivial changes.
+
+## Development and verification
+
+Install dependencies manually when needed:
+
+```bash
+corepack pnpm install
+```
+
+Run the normal checks:
+
+```bash
+corepack pnpm typecheck
+corepack pnpm build
+corepack pnpm test:clean-start
+corepack pnpm test:launcher-port
+```
+
+The clean-start test uses a temporary home directory. It does not write to your
+real `~/.claude`, `~/.gogoagent`, or `~/.cache/gogoagent` directories.
+
+To run only the sidecar during development:
 
 ```bash
 corepack pnpm --filter @gogoagent/sidecar dev
 ```
 
-By default the sidecar serves on:
-
-- `http://127.0.0.1:43111`
-
-Useful endpoints:
-
-- `GET /health`
-- `GET /snapshot`
-- `GET /sessions/:id`
-- `GET /search/messages?q=...`
-
-Example:
+For a hot-reloading sidecar on a separate port:
 
 ```bash
-GOGOAGENT_PORT="${GOGOAGENT_PORT:-43111}"
-GOGOAGENT_TOKEN="$(tr -d '\r\n' < "$HOME/.gogoagent/sidecar-${GOGOAGENT_PORT}.token")"
-
-# Health is public. All other endpoints require the per-run bearer token.
-curl "http://127.0.0.1:${GOGOAGENT_PORT}/health"
-curl -H "authorization: Bearer ${GOGOAGENT_TOKEN}" \
-  "http://127.0.0.1:${GOGOAGENT_PORT}/snapshot" | jq
+GOGOAGENT_PORT=43112 GOGOAGENT_WATCH_SIDECAR=1 ./start.sh
 ```
-
-## Build / verify
-
-### Typecheck everything
-
-```bash
-corepack pnpm typecheck
-```
-
-### Build the sidecar
-
-```bash
-corepack pnpm --filter @gogoagent/sidecar build
-```
-
-### Build the desktop app
-
-```bash
-corepack pnpm --filter @gogoagent/desktop build
-```
-
-### Clean-start smoke test
-
-Run the isolated first-run test with:
-
-```bash
-corepack pnpm test:clean-start
-```
-
-It starts and restarts the sidecar with a temporary home directory, checks the
-authentication boundary and token rotation, verifies empty and populated
-discovery, confirms stale terminal logs appear as history, migrates durable
-state out of cache, and checks that duplicate label requests share one job. It
-never writes to your real `~/.claude`, `~/.gogoagent`, or
-`~/.cache/gogoagent` directories.
-
-The launcher regression test confirms an occupied port never causes an
-implicit switch:
-
-```bash
-corepack pnpm test:launcher-port
-```
-
-## Current UI
-
-The desktop app centers on a workstream list and one selected workstream's
-timeline. From there you can:
-
-- start a shell, Claude, or Codex terminal in a working directory
-- inspect sessions, messages, artifacts, work locations, and lessons
-- search transcript messages
-- archive or restore workstreams
-- open Debug when discovery or indexing looks wrong
-
-## What works today
-
-- local Claude artifact discovery
-- session browsing
-- thread/cluster browsing
-- work-location rollups with evidence levels
-- transcript search with snippets
-- session detail with extracted candidates
-- lessons review + markdown/JSON export
-- branch-aware thread metadata and related-thread suggestions
-
-## Evidence levels for work locations
-
-gogoagent currently uses these labels:
-
-- `workspace_root` — session cwd / inferred project root
-- `touched` — Claude likely changed something there
-- `inspected` — Claude likely read/searched/listed it
-- `mentioned` — path appeared in transcript text/output
-
-These are still heuristic, but getting stronger over time.
 
 ## Current limitations
 
-- no packaged installer yet
-- not a polished end-user release yet
-- no durable manual merge/relate persistence yet
-- worktree inference still needs improvement
-- touched detection is still heuristic in places
-- sidecar is mid-refactor, though builds/typechecks should pass
-
-## Recommended workflow for now
-
-1. Run:
-   ```bash
-   ./start.sh
-   ```
-2. Open the app
-3. Choose a discovered workstream, or enter a directory under **Start a
-   workstream** and choose `+`.
-4. Open session details from the timeline when you need transcript-level detail.
-5. Use **Debug** only when discovery or indexing looks wrong.
-
-## Development notes
-
-If something seems broken, first run:
-
-```bash
-corepack pnpm typecheck
-corepack pnpm --filter @gogoagent/sidecar build
-corepack pnpm --filter @gogoagent/desktop build
-```
-
-That should catch most current issues quickly.
+- No packaged installer yet.
+- First launch still requires a source checkout and Node.js toolchain.
+- Discovery currently focuses on local Claude Code artifacts and gogoagent's
+  own terminal logs.
+- Worktree and touched-path inference remain heuristic in some cases.
+- There is no durable manual merge/relate workflow yet.

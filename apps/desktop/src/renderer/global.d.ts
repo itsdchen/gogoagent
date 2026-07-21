@@ -75,6 +75,8 @@ declare global {
       }
       files: {
         completeDirectory: (input: string) => Promise<{ input: string; completions: string[]; error?: string }>
+        inspectDirectory: (input: string) => Promise<{ input: string; path: string; exists: boolean; isDirectory: boolean; error?: string }>
+        selectDirectory: (defaultPath?: string) => Promise<string | null>
       }
       debug: {
         getState: () => Promise<import('@gogoagent/shared').DebugState>

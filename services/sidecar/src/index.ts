@@ -48,7 +48,12 @@ import {
 import { clampTitle, stableId } from './lib/utils.js'
 import { applyArchivedWorkstreamState, archiveWorkstream, restoreWorkstream } from './lib/workstreamArchive.js'
 import { getWorkstreamLabelJob, startWorkstreamLabelJob } from './lib/workstreamLabelJobs.js'
-import { getStoredWorkstreamLabelIds, putManualWorkstreamLabel } from './lib/workstreamLabels.js'
+import {
+  buildWorkstreamLabelInput,
+  getStoredWorkstreamLabelIds,
+  putManualWorkstreamLabel,
+  putSuggestedWorkstreamLabel,
+} from './lib/workstreamLabels.js'
 import { getAllOverrides, setProjectTitle, setSessionTitle } from './lib/titleStore.js'
 import { migrateLegacyClauderatorState } from './lib/legacyClauderatorMigration.js'
 import type {
@@ -389,6 +394,7 @@ async function applyTerminalWorkstreams(snapshot: SidecarSnapshot) {
     const workstream: Project = {
       id: workstreamId,
       name: clampTitle(title, 52),
+      nameSource: 'fallback',
       repoRoot,
       repoId: projectIdForRoot(repoRoot),
       branch,
@@ -456,9 +462,15 @@ async function buildSnapshotGeneration(force = false, allowStale = false): Promi
         // Preserve old auto-titles only when the canonical label store has no
         // entry. The former auto-title worker and the label job used to race
         // and repeatedly overwrite one another with different names.
-        if (!storedWorkstreamLabelIds.has(workstream.id) && auto?.name) workstream.name = auto.name
+        if (!storedWorkstreamLabelIds.has(workstream.id) && auto?.name) {
+          workstream.name = auto.name
+          workstream.nameSource = 'generated'
+        }
         const override = overrides.projects[workstream.id]
-        if (override) workstream.name = override
+        if (override) {
+          workstream.name = override
+          workstream.nameSource = 'manual'
+        }
       }
       await applyArchivedWorkstreamState(snapshot.workstreams)
       setCount('projects', snapshot.projects.length)
@@ -1161,11 +1173,14 @@ const server = http.createServer(async (req, res) => {
           loc.sessionIds.some((id) => project.sessionIds.includes(id)),
       )
       const suggestion = await suggestProjectTitle({ project, sessionOpeners: openers, touchedPaths })
-      await setProjectTitle(projectId, suggestion.name)
+      const labelInput = buildWorkstreamLabelInput(project, sessionResults, snapshot.workLocations)
+      const savedLabel = await putSuggestedWorkstreamLabel(labelInput, suggestion.name)
+      if (!savedLabel) throw new Error('Suggested title was too short')
+      await setProjectTitle(projectId, null)
       snapshotCache = null
-      recordActivity(`Suggested title: "${suggestion.name}"`)
+      recordActivity(`Suggested title: "${savedLabel}"`)
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ ok: true, projectId, ...suggestion }))
+      res.end(JSON.stringify({ ok: true, projectId, ...suggestion, name: savedLabel }))
     } catch (error) {
       res.writeHead(500, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ error: 'Failed to suggest title', detail: error instanceof Error ? error.message : String(error) }))

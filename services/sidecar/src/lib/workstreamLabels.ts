@@ -248,12 +248,16 @@ export function workstreamLabelCacheKey(input: WorkstreamLabelInput) {
 }
 
 export async function getCachedWorkstreamLabel(input: WorkstreamLabelInput) {
+  return (await getCachedWorkstreamLabelEntry(input))?.name ?? null
+}
+
+export async function getCachedWorkstreamLabelEntry(input: WorkstreamLabelInput) {
   const cache = await load()
   const entry = cache.entries[input.workstreamId]
-  if (entry?.source === 'manual') return entry.name
+  if (entry?.source === 'manual') return { name: entry.name, source: 'manual' as const }
   if (!entry || entry.version !== WORKSTREAM_LABEL_PROMPT_VERSION) return null
   if (entry.key !== workstreamLabelCacheKey(input)) return null
-  return entry.name
+  return { name: entry.name, source: 'generated' as const }
 }
 
 export async function getManualWorkstreamLabel(workstreamId: string) {
@@ -282,6 +286,21 @@ export async function putCachedWorkstreamLabel(input: WorkstreamLabelInput, name
   await persist()
 }
 
+export async function putSuggestedWorkstreamLabel(input: WorkstreamLabelInput, name: string) {
+  const label = cleanLabel(name)
+  if (!label) return null
+  const cache = await load()
+  cache.entries[input.workstreamId] = {
+    key: workstreamLabelCacheKey(input),
+    name: label,
+    source: 'auto',
+    updatedAt: new Date().toISOString(),
+    version: WORKSTREAM_LABEL_PROMPT_VERSION,
+  }
+  await persist()
+  return label
+}
+
 export async function putManualWorkstreamLabel(workstreamId: string, name: string) {
   const label = cleanLabel(name)
   if (!label) return null
@@ -304,8 +323,11 @@ export async function applyCachedWorkstreamLabels(
 ) {
   for (const workstream of workstreams) {
     const input = buildWorkstreamLabelInput(workstream, sessionResults, workLocations)
-    const cached = await getCachedWorkstreamLabel(input)
-    if (cached) workstream.name = cached
+    const cached = await getCachedWorkstreamLabelEntry(input)
+    if (cached) {
+      workstream.name = cached.name
+      workstream.nameSource = cached.source
+    }
   }
 }
 

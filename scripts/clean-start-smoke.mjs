@@ -72,6 +72,8 @@ async function verifyLabelJobDedup(testHome) {
   process.env.GOGOAGENT_CACHE_DIR = path.join(testHome, 'label-job-cache')
   const modulePath = path.join(repoRoot, 'services/sidecar/dist/services/sidecar/src/lib/workstreamLabelJobs.js')
   const { startWorkstreamLabelJob } = await import(pathToFileURL(modulePath).href)
+  const labelStorePath = path.join(repoRoot, 'services/sidecar/dist/services/sidecar/src/lib/workstreamLabels.js')
+  const { applyCachedWorkstreamLabels, putManualWorkstreamLabel } = await import(pathToFileURL(labelStorePath).href)
 
   const startedAt = '2026-01-02T03:04:05.000Z'
   const workstreamId = 'workstream-label-dedupe'
@@ -141,6 +143,17 @@ async function verifyLabelJobDedup(testHome) {
   assert.equal(first.state, 'done', `deduplicated label job did not finish: ${JSON.stringify(first.errors)}`)
   assert.equal(runnerCalls, 1, 'duplicate label requests should invoke the LLM once')
   assert.equal(first.generated, 1, 'deduplicated label job should persist one label')
+
+  const generatedWorkstream = { ...workstream }
+  await applyCachedWorkstreamLabels([generatedWorkstream], [sessionResult], [])
+  assert.equal(generatedWorkstream.name, 'Naming Job Deduplication', 'generated label should be applied')
+  assert.equal(generatedWorkstream.nameSource, 'generated', 'generated label should expose its source')
+
+  await putManualWorkstreamLabel(workstreamId, 'Manual Naming Choice')
+  const manualWorkstream = { ...workstream }
+  await applyCachedWorkstreamLabels([manualWorkstream], [sessionResult], [])
+  assert.equal(manualWorkstream.name, 'Manual Naming Choice', 'manual label should take precedence')
+  assert.equal(manualWorkstream.nameSource, 'manual', 'manual label should expose its source')
 }
 
 async function verifyNeedsInputDetection() {

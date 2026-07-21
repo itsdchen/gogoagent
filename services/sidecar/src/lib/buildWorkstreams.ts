@@ -173,6 +173,7 @@ function makeWorkstream(
   return {
     id,
     name: workstreamName(run, repoRoot, branch),
+    nameSource: 'fallback',
     repoRoot,
     repoId: first.projectId,
     branch,

@@ -1,4 +1,4 @@
-import { BrowserWindow, Menu, app, type Event as ElectronEvent, type Input } from 'electron'
+import { BrowserWindow, Menu, app, dialog, ipcMain, type Event as ElectronEvent, type Input } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -9,6 +9,19 @@ const MIN_ZOOM_LEVEL = -3
 const MAX_ZOOM_LEVEL = 4
 const ZOOM_LEVEL_STEP = 0.5
 let appZoomLevel = 0
+const SELECT_DIRECTORY_CHANNEL = 'gogoagent:select-directory'
+
+ipcMain.handle(SELECT_DIRECTORY_CHANNEL, async (event, defaultPath?: unknown) => {
+  const window = BrowserWindow.fromWebContents(event.sender)
+  const options = {
+    properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>,
+    ...(typeof defaultPath === 'string' && defaultPath.trim() ? { defaultPath: defaultPath.trim() } : {}),
+  }
+  const result = window
+    ? await dialog.showOpenDialog(window, options)
+    : await dialog.showOpenDialog(options)
+  return result.canceled ? null : result.filePaths[0] ?? null
+})
 
 function clampZoomLevel(level: number) {
   return Math.min(MAX_ZOOM_LEVEL, Math.max(MIN_ZOOM_LEVEL, level))

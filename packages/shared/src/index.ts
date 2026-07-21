@@ -148,6 +148,7 @@ export interface RefineJobStatus {
 export interface Project {
   id: string
   name: string
+  nameSource?: 'fallback' | 'generated' | 'manual'
   repoRoot: string
   repoId: string
   branch?: string
