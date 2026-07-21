@@ -9,21 +9,18 @@ workstreams where you left off.
 *Shown with generated repositories, transcripts, and terminal output. See the
 [safe capture workflow](./docs/screenshots/README.md).*
 
-## Why it helps
+## What it does
 
-- **Too many conversations to keep straight.** gogoagent groups sessions and
-  terminals for the same repo and branch into one workstream, with its history,
-  touched paths, and terminal logs in one place.
-- **An agent is waiting in a buried terminal.** A yellow `>` marks the
-  workstream that needs input and jumps straight to it.
-- **Switching agents means explaining everything again.** gogoagent can carry
-  Claude Code memories into Codex, or Codex instructions back into Claude
-  Code. It pastes a short handoff into the new terminal for you to review
-  before sending instead of dumping the whole transcript.
-- **Old work is hard to restart.** Return to the workstream, resume its latest
-  Claude conversation when possible, or start Codex with the relevant context.
-- **The work list gets noisy.** Search, rename, pin, and archive workstreams as
-  priorities change.
+gogoagent groups related sessions and terminals into workstreams, so old work
+doesn't disappear into a pile of terminal tabs. From a workstream, you can:
+
+- Read a clean timeline of messages, tool calls, and touched files instead of
+  scrolling through raw terminal output.
+- See when an agent is waiting for input and jump straight to its terminal.
+- Carry a short, reviewable memory handoff between Claude Code and Codex
+  instead of pasting the whole transcript.
+- Resume the latest Claude conversation or restart Codex with the context it
+  needs.
 
 > **Project status:** gogoagent runs from source; there is no installer yet.
 > Most development happens on Linux. macOS should work but has had less
@@ -91,21 +88,22 @@ Coding transcripts and terminal logs can contain private code and sensitive
 output. gogoagent keeps discovery, indexing, storage, terminal management, and
 cross-agent memory handoffs on your machine.
 
-The sidecar listens only on `127.0.0.1` and protects every route except its
-health check with a per-run token that renderer code cannot access. gogoagent
-does not intentionally read Claude credentials or authentication files.
+The sidecar only accepts local connections. It uses a new auth token each time
+it starts, and that token is never exposed to the app's UI. gogoagent does not
+intentionally read Claude credentials or authentication files.
 
-Two optional actions use your installed Codex CLI and may contact its
-configured model provider:
+Two optional features can send selected context through your installed Codex
+CLI:
 
 - **Improve names** sends selected repo and branch names, clipped user or
   terminal messages, and touched paths.
 - **Extract lessons** sends candidate lesson text and nearby conversation
   context.
 
-Neither action is needed for discovery or terminal management, and automatic
-naming is off by default. Memory sharing is different: the handoff is built
-locally, and nothing is sent until you review it in the new terminal.
+The CLI may contact its configured model provider. You do not need either
+feature to browse history or run terminals, and automatic naming is off by
+default. Memory sharing is different: the handoff is built locally, and
+nothing is sent until you review it in the new terminal.
 
 <details>
 <summary>Files gogoagent reads and writes</summary>
@@ -133,14 +131,13 @@ are left alone.
 
 ## How terminals stay alive
 
-Closing the window should not kill long-running work. gogoagent keeps live
-terminals in a small local background process called the sidecar. Closing
-Electron may leave that process running so the terminals survive a window
-restart; pressing Ctrl+C stops Electron and any sidecar started by that
-launcher. A sidecar reused from an earlier run stays alive.
+Live terminals run in a small background process called the sidecar, so closing
+and reopening the window does not kill them. Ctrl+C stops Electron and any
+sidecar started by that launch. A sidecar that was already running stays up.
 
-`./start.sh` reuses a healthy sidecar at `http://127.0.0.1:43111` instead of
-switching ports and making its terminals look like they disappeared.
+`./start.sh` reconnects to the sidecar on port `43111`. It will not quietly
+choose another port, because that would make running terminals appear to
+vanish.
 
 Restart only the window while keeping the sidecar:
 
@@ -173,7 +170,7 @@ coding agents should also read [AGENTS.md](./AGENTS.md).
 
 ## Current limitations
 
-- Discovery starts with local Claude Code history. Codex work appears when it
-  is launched or logged through gogoagent.
-- Worktree and touched-path inference remain heuristic in some cases.
-- There is no durable manual merge or relate workflow yet.
+- gogoagent discovers existing Claude Code history. It only knows about Codex
+  work launched or logged through gogoagent.
+- Worktree detection and touched-file lists are best-effort and can be wrong.
+- You cannot manually merge or link workstreams yet.

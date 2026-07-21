@@ -13,8 +13,8 @@ tokens, private transcript contents, personal paths, or customer data.
 - Agent: Codex (current session)
 - Task: Rewrite the README around concrete user pain, obvious value, and non-repetitive language.
 - Started: 2026-07-21
-- Status / next step: README now uses the user's concise opening and pain-to-value framing throughout; ready for review and commit.
-- Last verification: All README-relative links resolve and `git diff --check` passes. The change is documentation-only and leaves the previously verified build and screenshots unchanged.
+- Status / next step: README tone is natural throughout, including privacy, terminal persistence, and limitations; ready for review and commit.
+- Last verification: `git diff --check` passes. The change remains documentation-only and leaves the previously verified links, build, and screenshots unchanged.
 
 ## Product
 
