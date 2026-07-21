@@ -1,7 +1,8 @@
 # Hacking on gogoagent
 
 Day-to-day commands for running, poking, and debugging the app.
-See `README.md` for what gogoagent *is*.
+See `README.md` for what gogoagent *is* and `TROUBLESHOOTING.md` for startup
+recovery.
 
 ## Run the app (dev)
 
@@ -13,9 +14,11 @@ From the repo root:
 
 That script:
 
-1. Builds `@gogoagent/shared` and `@gogoagent/desktop`.
-2. Reuses a healthy sidecar on the selected port, or starts one without file watching.
-3. Launches Electron pointed at the built renderer.
+1. Installs or repairs missing dependencies.
+2. Builds `@gogoagent/shared` and `@gogoagent/desktop`.
+3. Reuses a healthy sidecar on the selected port, or starts one without file
+   watching.
+4. Launches Electron pointed at the built renderer.
 
 Pressing Ctrl+C stops Electron and any sidecar started by that launcher. A
 reused sidecar stays running. Closing Electron can also leave the sidecar
@@ -81,14 +84,16 @@ curl -s -H "authorization: Bearer ${GOGOAGENT_TOKEN}" "http://127.0.0.1:${GOGOAG
 curl -s -H "authorization: Bearer ${GOGOAGENT_TOKEN}" "http://127.0.0.1:${GOGOAGENT_PORT}/sessions/<sessionId>" | python3 -m json.tool
 
 # Message search
-curl -s -H "authorization: Bearer ${GOGOAGENT_TOKEN}" "http://127.0.0.1:${GOGOAGENT_PORT}/search/messages?q=retraded" | python3 -m json.tool
+curl -s -H "authorization: Bearer ${GOGOAGENT_TOKEN}" "http://127.0.0.1:${GOGOAGENT_PORT}/search/messages?q=timeout" | python3 -m json.tool
 ```
 
 ## Refining lessons with codex
 
-The "Refine lessons" button in the UI posts to `/lessons/refine` with a
+The **Extract lessons** button in the UI posts to `/lessons/refine` with a
 `projectId`. The sidecar shells out to the `codex` CLI per candidate
-and saves results to `~/.gogoagent/state/refined-lessons.json`.
+and saves results to `~/.gogoagent/state/refined-lessons.json`. This sends the
+candidate text and nearby conversation context through the configured Codex
+CLI; it is not part of local-only discovery or indexing.
 
 ```bash
 GOGOAGENT_PORT="${GOGOAGENT_PORT:-43111}"
@@ -129,12 +134,13 @@ There's also a helper script that wraps the refine+poll loop for one session:
 ## Where things live
 
 ```
-apps/desktop/src/renderer/       index.html, renderer.ts, styles.css
-apps/desktop/src/main.ts         Electron main process
-services/sidecar/src/index.ts    HTTP routes
-services/sidecar/src/lib/        parseTranscript, buildSnapshotModel,
-                                 buildWorkstreams, refine{Lessons,Cache,Jobs}
-packages/shared/src/index.ts     shared TS types
+apps/desktop/src/electron/       Electron main process and preload bridge
+apps/desktop/src/renderer/       HTML, renderer behavior, and styles
+apps/desktop/scripts/dev.mjs     desktop/sidecar development launcher
+services/sidecar/src/index.ts    loopback HTTP routes
+services/sidecar/src/lib/        discovery, workstreams, terminals, refinement
+packages/shared/src/index.ts     shared TypeScript types
+scripts/                         smoke tests and developer utilities
 ```
 
 ## Data gogoagent reads

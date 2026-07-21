@@ -2188,7 +2188,7 @@ function renderProjectsList() {
         ? `
           <span class="project-live-indicator${needsInputCount > 0 ? ' needs-input' : ''}" title="${esc(liveTitle)}" aria-label="${esc(liveTitle)}">
             <span class="project-live-dot" aria-hidden="true"></span>
-            ${needsInputCount > 0 ? `<button class="project-input-indicator" type="button" data-input-project-id="${esc(project.id)}" data-input-terminal-id="${esc(needsInputIds[0] ?? '')}" title="Jump to waiting terminal." aria-label="Jump to waiting terminal">Input</button>` : ''}
+            ${needsInputCount > 0 ? `<button class="project-input-indicator" type="button" data-input-project-id="${esc(project.id)}" data-input-terminal-id="${esc(needsInputIds[0] ?? '')}" title="Jump to waiting terminal." aria-label="Jump to waiting terminal">&gt;</button>` : ''}
           </span>
         `
         : ''

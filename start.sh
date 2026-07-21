@@ -45,7 +45,7 @@ require_node() {
 
 require_pnpm() {
   command -v corepack >/dev/null 2>&1 \
-    || fail "corepack is required to run pnpm. Install Node.js with Corepack enabled."
+    || fail "Corepack is required to run pnpm. Install it with: npm install --global corepack@latest"
   corepack pnpm --version >/dev/null 2>&1 \
     || fail "Corepack could not run pnpm. Try: corepack enable && corepack pnpm install"
 }

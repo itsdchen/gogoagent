@@ -775,19 +775,19 @@ input, select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: auto;
-  min-width: 0;
+  width: 14px;
+  min-width: 14px;
   height: 18px;
   min-height: 18px;
-  padding: 0.08rem 0.35rem;
-  border: 1px solid rgba(255,209,102,0.38);
-  border-radius: 999px;
-  background: rgba(255,209,102,0.12);
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
   box-shadow: none;
   color: #ffd166;
-  font-size: 0.66rem;
-  font-weight: 800;
-  line-height: 1;
+  font-size: 0.9rem;
+  font-weight: 900;
+  line-height: 0.8;
   text-transform: none;
 }
 .project-input-indicator:hover {

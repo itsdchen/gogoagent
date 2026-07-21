@@ -93,7 +93,7 @@ function printSidecarCleanupHint(port, reason) {
     console.warn(`[gogoagent/desktop] listener on port ${port}:`)
     console.warn(details)
   }
-  console.warn(`[gogoagent/desktop] cleanup (ends live terminals if this is a sidecar): lsof -tiTCP:${port} -sTCP:LISTEN | xargs -r kill`)
+  console.warn(`[gogoagent/desktop] cleanup (ends live terminals if this is a sidecar): lsof -tiTCP:${port} -sTCP:LISTEN | while IFS= read -r pid; do kill "$pid"; done`)
   console.warn("[gogoagent/desktop] inspect: pgrep -af 'tsx.*src/index.ts|services/sidecar|gogoagent'")
   console.warn('[gogoagent/desktop] reuse a healthy sidecar: ./start.sh')
   console.warn('[gogoagent/desktop] run separately on an explicit unused port: GOGOAGENT_PORT=43112 ./start.sh')
