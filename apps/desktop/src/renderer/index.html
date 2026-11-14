@@ -104,6 +104,14 @@
           <p id="global-launch-status" class="meta"></p>
         </section>
 
+        <section id="attention-section" class="attention-panel hidden" aria-labelledby="attention-label">
+          <div class="mini-section-header">
+            <p id="attention-label" class="label">Needs you</p>
+            <span id="attention-count" class="badge attention-count">0</span>
+          </div>
+          <div id="attention-list" class="attention-list"></div>
+        </section>
+
         <div class="projects-column">
           <div class="mini-section-header">
             <p class="label">Workstreams</p>
@@ -199,15 +207,6 @@
                 </button>
               </div>
               <p class="meta" id="detail-meta"></p>
-              <input
-                id="status-note-input"
-                class="status-note-input project-only"
-                type="text"
-                maxlength="160"
-                placeholder="Status note..."
-                spellcheck="true"
-                aria-label="Workstream status note"
-              />
               <p id="rename-status" class="meta block"></p>
             </div>
             <div class="button-row workstream-action-row">
@@ -234,6 +233,38 @@
             </div>
           </header>
 
+          <section class="detail-card workstream-state-card project-only">
+            <div class="section-heading-row">
+              <div>
+                <p class="label">Workstream state</p>
+                <p class="meta">A durable handoff shared by every gogoagent client.</p>
+              </div>
+              <div class="button-row">
+                <button id="state-edit-button" class="secondary-button" type="button">
+                  <span class="button-icon" data-icon="pencil" aria-hidden="true"></span>
+                  <span class="button-label">Edit</span>
+                </button>
+                <button id="state-save-button" class="hidden" type="button">
+                  <span class="button-icon" data-icon="check" aria-hidden="true"></span>
+                  <span class="button-label">Save</span>
+                </button>
+                <button id="state-cancel-button" class="secondary-button hidden" type="button">
+                  <span class="button-icon" data-icon="x" aria-hidden="true"></span>
+                  <span class="button-label">Cancel</span>
+                </button>
+              </div>
+            </div>
+            <div id="workstream-state-summary" class="workstream-state-summary"></div>
+            <form id="workstream-state-form" class="workstream-state-form hidden">
+              <label>Goal<textarea id="state-goal-input" rows="2" maxlength="1200"></textarea></label>
+              <label>Current state<textarea id="state-current-input" rows="2" maxlength="1200"></textarea></label>
+              <label>Blocker or question<textarea id="state-blocker-input" rows="2" maxlength="1200"></textarea></label>
+              <label>Next action<textarea id="state-next-input" rows="2" maxlength="1200"></textarea></label>
+              <label>Last verification<textarea id="state-verification-input" rows="2" maxlength="1200"></textarea></label>
+            </form>
+            <p id="workstream-state-status" class="meta block"></p>
+          </section>
+
           <section id="terminal-card" class="detail-card terminal-card">
             <div class="section-heading-row">
               <div>
@@ -241,6 +272,21 @@
                 <p id="terminal-help" class="meta"></p>
               </div>
             </div>
+            <section id="desktop-decision-card" class="desktop-decision-card hidden" aria-labelledby="desktop-decision-title">
+              <div class="desktop-decision-heading"><span class="desktop-decision-dot" aria-hidden="true"></span><strong id="desktop-decision-title">Waiting for your decision</strong></div>
+              <div class="desktop-decision-grid">
+                <div><span class="desktop-decision-label">Agent prompt</span><pre id="desktop-decision-prompt"></pre></div>
+                <div><span class="desktop-decision-label">Workstream context</span><p id="desktop-decision-context"></p><small>Context describes the workstream. Check the prompt for why this specific action needs approval.</small></div>
+              </div>
+              <div id="desktop-decision-choices" class="desktop-decision-choices"></div>
+              <p id="desktop-decision-status" role="status" aria-live="polite"></p>
+            </section>
+            <section id="desktop-decision-receipt" class="desktop-decision-receipt hidden" aria-labelledby="desktop-receipt-title">
+              <div><strong id="desktop-receipt-title">Last choice sent</strong><span id="desktop-receipt-time"></span></div>
+              <p id="desktop-receipt-choice"></p>
+              <p id="desktop-receipt-status"></p>
+              <button id="desktop-receipt-output" class="secondary-button" type="button">View latest output ↓</button>
+            </section>
             <div id="terminal-tabs" class="terminal-tabs"></div>
             <div id="terminal-empty" class="terminal-empty">
               <p>No terminal running.</p>
@@ -336,6 +382,10 @@
     <footer class="app-footer">
       <span id="footer-stats" class="meta">—</span>
       <span id="footer-activity" class="meta footer-activity"></span>
+      <button id="phone-toggle" class="link-button" type="button" title="Connect a phone browser to this gogoagent instance.">
+        <span class="button-icon" data-icon="smartphone" aria-hidden="true"></span>
+        <span class="button-label">Connect phone</span>
+      </button>
       <button id="settings-toggle" class="link-button" type="button" title="Open display settings.">
         <span class="button-icon" data-icon="settings" aria-hidden="true"></span>
         <span class="button-label">Settings</span>
@@ -373,6 +423,68 @@
 
       <h3 class="debug-section-title">Recent errors</h3>
       <ul id="debug-errors" class="debug-list"></ul>
+    </dialog>
+
+    <dialog id="phone-dialog" class="settings-dialog phone-dialog">
+      <form method="dialog" class="debug-dialog-header">
+        <div>
+          <p class="eyebrow">Mobile access</p>
+          <h2>Connect phone</h2>
+        </div>
+        <button value="close" class="secondary-button" title="Close this dialog.">
+          <span class="button-icon" data-icon="x" aria-hidden="true"></span>
+          <span class="button-label">Close</span>
+        </button>
+      </form>
+
+      <p class="phone-browser-note">
+        Use gogoagent in Safari or Chrome on your phone. There is no app to install;
+        you can optionally add the page to your home screen afterward.
+      </p>
+
+      <section id="phone-offline" class="phone-offline">
+        <p class="meta">
+          Phone access is off. Starting it makes a paired, limited-control UI available
+          on your private network until you stop it or quit gogoagent.
+        </p>
+        <button id="phone-start-button" type="button">
+          <span class="button-icon" data-icon="smartphone" aria-hidden="true"></span>
+          <span class="button-label">Start phone access</span>
+        </button>
+      </section>
+
+      <section id="phone-online" class="phone-online hidden">
+        <div class="phone-pair-grid">
+          <div class="phone-qr-frame">
+            <img id="phone-qr-image" alt="QR code containing a temporary gogoagent pairing link" />
+          </div>
+          <div class="phone-pair-details">
+            <label for="phone-address-select">Connection</label>
+            <select id="phone-address-select"></select>
+            <p class="meta">Scan the QR code with your phone camera. It opens and pairs in the browser automatically.</p>
+            <div class="phone-code-block">
+              <span class="meta">Or enter this code</span>
+              <strong id="phone-pairing-code">—</strong>
+            </div>
+            <p id="phone-device-count" class="meta"></p>
+          </div>
+        </div>
+        <div class="phone-actions button-row">
+          <button id="phone-copy-link-button" class="secondary-button" type="button">
+            <span class="button-icon" data-icon="copy" aria-hidden="true"></span>
+            <span class="button-label">Copy pairing link</span>
+          </button>
+          <button id="phone-stop-button" class="secondary-button danger-button" type="button">
+            <span class="button-icon" data-icon="square" aria-hidden="true"></span>
+            <span class="button-label">Stop phone access</span>
+          </button>
+        </div>
+        <p class="meta phone-network-note">
+          Same Wi-Fi works directly. Away from this computer, use a private VPN such as Tailscale;
+          do not expose this HTTP port to the public internet.
+        </p>
+      </section>
+      <p id="phone-status" class="meta block" role="status" aria-live="polite"></p>
     </dialog>
 
     <dialog id="settings-dialog" class="settings-dialog">
@@ -446,6 +558,29 @@
       </form>
       <input id="transcript-search" type="search" placeholder="Find in transcript…" />
       <div id="transcript-body" class="transcript-body"></div>
+    </dialog>
+
+    <dialog id="continuation-dialog" class="continuation-dialog">
+      <div class="continuation-dialog-header">
+        <div>
+          <p class="eyebrow">Continue workstream</p>
+          <h2 id="continuation-title">Review continuation</h2>
+          <p id="continuation-meta" class="meta"></p>
+        </div>
+        <button id="continuation-cancel-button" class="secondary-button" type="button">
+          <span class="button-icon" data-icon="x" aria-hidden="true"></span>
+          <span class="button-label">Cancel</span>
+        </button>
+      </div>
+      <div id="continuation-repository-state" class="continuation-repository-state"></div>
+      <label id="continuation-context-label" class="continuation-context-label">
+        Context to paste for review
+        <textarea id="continuation-context" rows="18" spellcheck="false"></textarea>
+      </label>
+      <div class="continuation-dialog-actions">
+        <button id="continuation-secondary-button" class="secondary-button" type="button">Start without context</button>
+        <button id="continuation-primary-button" type="button">Start and paste context</button>
+      </div>
     </dialog>
 
     <script src="./vendor/xterm.js"></script>

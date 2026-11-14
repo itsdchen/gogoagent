@@ -1,9 +1,11 @@
 import http from 'node:http'
 import path from 'node:path'
 import os from 'node:os'
-import { readdir, unlink } from 'node:fs/promises'
+import { readdir, stat, unlink } from 'node:fs/promises'
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { buildSnapshotModel } from './lib/buildSnapshotModel.js'
 import {
   loadHistoryIndex,
@@ -19,6 +21,8 @@ import {
   type TranscriptParseResult,
   parseTranscript,
 } from './lib/parseTranscript.js'
+import { parseCodexTranscript } from './lib/parseCodexTranscript.js'
+import { decisionPromptFromLog, decisionQuestion } from './lib/decisionPrompt.js'
 import { getAllAutoTitles } from './lib/autoTitleStore.js'
 import { getAllRefined, getRefinedForSession } from './lib/refineCache.js'
 import { dryRunRefine, getJob, startRefineJob } from './lib/refineJobs.js'
@@ -56,21 +60,30 @@ import {
 } from './lib/workstreamLabels.js'
 import { getAllOverrides, setProjectTitle, setSessionTitle } from './lib/titleStore.js'
 import { migrateLegacyClauderatorState } from './lib/legacyClauderatorMigration.js'
+import { applyWorkstreamStates, setWorkstreamState } from './lib/workstreamState.js'
+import { applyWorkstreamViews, getWorkstreamViewRevision, markWorkstreamViewed } from './lib/workstreamViews.js'
+import { getMobileGatewayStatus, startMobileGateway, stopMobileGateway, stopMobileGatewayOnExit } from './lib/mobileGateway.js'
 import type {
+  AttentionItem,
   ArtifactEvidence,
   MessageSearchResponse,
   Project,
   ProjectDetail,
   SessionDetail,
   SidecarSnapshot,
+  TerminalDecisionReceipt,
   WorkLocationRecord,
+  WorkstreamState,
 } from '@gogoagent/shared'
+
+const execFileAsync = promisify(execFile)
 
 const port = Number(process.env.GOGOAGENT_PORT ?? 43111)
 const authToken = randomBytes(32).toString('base64url')
 const authTokenPath = process.env.GOGOAGENT_AUTH_TOKEN_FILE
   ?? path.join(os.homedir(), '.gogoagent', `sidecar-${port}.token`)
 const claudeDir = path.join(os.homedir(), '.claude')
+const codexSessionsDir = path.join(process.env.CODEX_HOME ?? path.join(os.homedir(), '.codex'), 'sessions')
 const historyPath = path.join(claudeDir, 'history.jsonl')
 const projectsDir = path.join(claudeDir, 'projects')
 const sessionsDir = path.join(claudeDir, 'sessions')
@@ -147,7 +160,7 @@ function makeTranscriptCacheContext(
 // Wraps the lib discovery helpers with runStep instrumentation so /debug/state
 // shows per-phase counts and timings. The lib helpers themselves are
 // instrumentation-free so they can be reused in tests.
-async function loadTranscripts(): Promise<TranscriptParseResult[]> {
+async function loadTranscripts(): Promise<{ results: TranscriptParseResult[]; files: string[] }> {
   const [historyIndex, sessionMeta, todoCounts] = await Promise.all([
     runStep('history', () => loadHistoryIndex(historyPath), (value) => ({ count: value.size })),
     runStep('sessionMeta', () => loadSessionMeta(sessionsDir), (value) => ({ count: value.size })),
@@ -170,7 +183,7 @@ async function loadTranscripts(): Promise<TranscriptParseResult[]> {
   const cacheContext = makeTranscriptCacheContext(historyIndex, sessionMeta, todoCounts)
   let cacheHits = 0
   let cacheMisses = 0
-  return runStep(
+  const results = await runStep(
     'parseTranscripts',
     async () => {
       const parsed = await Promise.all(
@@ -199,17 +212,46 @@ async function loadTranscripts(): Promise<TranscriptParseResult[]> {
           }
         }),
       )
-      const results = parsed.filter((result): result is TranscriptParseResult => result !== null)
-      try {
-        await pruneTranscriptCache(new Set(transcriptFiles))
-        await flushTranscriptCache()
-      } catch (error) {
-        recordError('transcriptCache', error instanceof Error ? error.message : String(error))
-      }
-      return results
+      return parsed.filter((result): result is TranscriptParseResult => result !== null)
     },
     (value) => ({ count: value.length, detail: `${cacheHits} cached, ${cacheMisses} parsed` }),
   )
+  return { results, files: transcriptFiles }
+}
+
+async function loadCodexTranscripts(): Promise<{ results: TranscriptParseResult[]; files: string[] }> {
+  const files = await runStep(
+    'walkCodexTranscripts',
+    () => walkFiles(codexSessionsDir, (entryPath) => entryPath.endsWith('.jsonl')),
+    (value) => ({ count: value.length, detail: `under ${codexSessionsDir}` }),
+  )
+  let cacheHits = 0
+  let cacheMisses = 0
+  const results = await runStep('parseCodexTranscripts', async () => {
+    const parsed: Array<TranscriptParseResult | null> = []
+    // Rollouts can be large. Keep the number of simultaneous reads bounded.
+    for (let start = 0; start < files.length; start += 16) {
+      parsed.push(...await Promise.all(files.slice(start, start + 16).map(async (filePath) => {
+        try {
+          const stamp = await stampTranscript(filePath, 'codex-v1')
+          const cached = await getCachedTranscript(stamp)
+          if (cached) {
+            cacheHits += 1
+            return cached
+          }
+          cacheMisses += 1
+          const result = await parseCodexTranscript(filePath, parseTranscriptDeps)
+          if (result) await putCachedTranscript(stamp, result)
+          return result
+        } catch (error) {
+          recordError('parseCodexTranscript', error instanceof Error ? error.message : String(error), filePath)
+          return null
+        }
+      })))
+    }
+    return parsed.filter((result): result is TranscriptParseResult => result !== null)
+  }, (value) => ({ count: value.length, detail: `${cacheHits} cached, ${cacheMisses} parsed` }))
+  return { results, files }
 }
 
 async function loadTerminalLogs(): Promise<TranscriptParseResult[]> {
@@ -236,12 +278,9 @@ function normalizedPathKey(value: string) {
   return path.resolve(value).replace(/\/+$/, '')
 }
 
-function isClaudeTerminalLog(result: TranscriptParseResult) {
-  return result.session.id.startsWith('terminal-') && result.session.title.toLowerCase().startsWith('claude terminal')
-}
-
-function isNativeClaudeTranscript(result: TranscriptParseResult) {
-  return !result.session.id.startsWith('terminal-') && result.session.transcriptPath.includes(`${path.sep}.claude${path.sep}projects${path.sep}`)
+function isAgentTerminalLog(result: TranscriptParseResult) {
+  return result.session.id.startsWith('terminal-')
+    && (result.session.agentKind === 'claude' || result.session.agentKind === 'codex')
 }
 
 function findNativeTranscriptForTerminal(
@@ -273,24 +312,23 @@ function findNativeTranscriptForTerminal(
 }
 
 function attachTerminalWorkstreamsToNativeTranscripts(
-  claudeSessions: TranscriptParseResult[],
+  nativeSessions: TranscriptParseResult[],
   terminalSessions: TranscriptParseResult[],
 ) {
-  const nativeClaudeSessions = claudeSessions.filter(isNativeClaudeTranscript)
   const usedNativeSessionIds = new Set<string>()
   const workstreamIdByNativeSessionId = new Map<string, string>()
   const workstreamTitleByNativeSessionId = new Map<string, string>()
   const keptTerminalSessions: TranscriptParseResult[] = []
 
   for (const terminalResult of terminalSessions) {
-    if (!isClaudeTerminalLog(terminalResult) || !terminalResult.session.workstreamId) {
+    if (!isAgentTerminalLog(terminalResult) || !terminalResult.session.workstreamId) {
       keptTerminalSessions.push(terminalResult)
       continue
     }
 
     const nativeResult = findNativeTranscriptForTerminal(
       terminalResult,
-      nativeClaudeSessions,
+      nativeSessions.filter((candidate) => candidate.session.agentKind === terminalResult.session.agentKind),
       usedNativeSessionIds,
       workstreamIdByNativeSessionId,
     )
@@ -308,23 +346,34 @@ function attachTerminalWorkstreamsToNativeTranscripts(
     usedNativeSessionIds.add(nativeResult.session.id)
   }
 
-  const attachedClaudeSessions = claudeSessions.map((result) => {
+  const attachedNativeSessions = nativeSessions.map((result) => {
     const workstreamId = workstreamIdByNativeSessionId.get(result.session.id)
     const terminalTitle = workstreamTitleByNativeSessionId.get(result.session.id)
     return workstreamId
-      ? { ...result, session: { ...result.session, workstreamId, title: terminalTitle ?? result.session.title } }
+      ? { ...result, session: {
+          ...result.session,
+          workstreamId,
+          title: result.session.agentKind === 'claude' ? terminalTitle ?? result.session.title : result.session.title,
+        } }
       : result
   })
 
-  return [...attachedClaudeSessions, ...keptTerminalSessions]
+  return [...attachedNativeSessions, ...keptTerminalSessions]
 }
 
 async function loadIndexedSessions(): Promise<TranscriptParseResult[]> {
-  const [claudeSessions, terminalSessions] = await Promise.all([
+  const [claude, codex, terminalSessions] = await Promise.all([
     loadTranscripts(),
+    loadCodexTranscripts(),
     loadTerminalLogs(),
   ])
-  return attachTerminalWorkstreamsToNativeTranscripts(claudeSessions, terminalSessions)
+  try {
+    await pruneTranscriptCache(new Set([...claude.files, ...codex.files]))
+    await flushTranscriptCache()
+  } catch (error) {
+    recordError('transcriptCache', error instanceof Error ? error.message : String(error))
+  }
+  return attachTerminalWorkstreamsToNativeTranscripts([...claude.results, ...codex.results], terminalSessions)
 }
 
 interface SnapshotGeneration {
@@ -336,6 +385,7 @@ interface SnapshotGeneration {
 
 let scanInFlight: Promise<SnapshotGeneration> | null = null
 let snapshotCache: SnapshotGeneration | null = null
+const decisionReceipts = new Map<string, Omit<TerminalDecisionReceipt, 'terminalStatus'>>()
 const SNAPSHOT_CACHE_MS = Number(process.env.GOGOAGENT_SNAPSHOT_CACHE_MS ?? 1000)
 
 function terminalKindLabel(kind: TerminalSessionRecord['kind']) {
@@ -416,6 +466,11 @@ async function applyTerminalWorkstreams(snapshot: SidecarSnapshot) {
 }
 
 addTerminalEventListener((event) => {
+  if (event.type === 'data' && event.payload.data) {
+    const receipt = decisionReceipts.get(event.payload.id)
+    if (receipt && !receipt.outputAt) receipt.outputAt = new Date().toISOString()
+  }
+  if (event.type === 'closed') decisionReceipts.delete(event.payload.id)
   if (event.type === 'exit' || event.type === 'closed' || (event.type === 'data' && event.payload.needsInputChanged)) {
     snapshotCache = null
   }
@@ -436,6 +491,7 @@ async function buildSnapshotGeneration(force = false, allowStale = false): Promi
     beginScan()
     await setPaths([
       { name: 'projectsDir', path: projectsDir },
+      { name: 'codexSessionsDir', path: codexSessionsDir },
       { name: 'historyPath', path: historyPath },
       { name: 'sessionsDir', path: sessionsDir },
       { name: 'todosDir', path: todosDir },
@@ -473,6 +529,8 @@ async function buildSnapshotGeneration(force = false, allowStale = false): Promi
         }
       }
       await applyArchivedWorkstreamState(snapshot.workstreams)
+      await applyWorkstreamStates(snapshot.workstreams)
+      await applyWorkstreamViews(snapshot.workstreams)
       setCount('projects', snapshot.projects.length)
       setCount('sessions', snapshot.sessions.length)
       setCount('artifacts', snapshot.artifacts.length)
@@ -620,6 +678,96 @@ async function buildProjectDetail(projectId: string): Promise<ProjectDetail | nu
   return { project, sessions, refinedLessons, touchedPaths }
 }
 
+function buildAttentionItems(snapshot: SidecarSnapshot): AttentionItem[] {
+  const visibleWorkstreams = snapshot.workstreams.filter((workstream) => !workstream.archivedAt)
+  const workstreamById = new Map(visibleWorkstreams.map((workstream) => [workstream.id, workstream]))
+  const items: AttentionItem[] = []
+
+  for (const workstream of visibleWorkstreams) {
+    if (!workstream.state?.blocker) continue
+    items.push({
+      id: `blocked:${workstream.id}`,
+      workstreamId: workstream.id,
+      kind: 'blocked',
+      priority: 'review',
+      title: workstream.name,
+      reason: workstream.state.blocker,
+      since: workstream.state.updatedAt ?? workstream.lastUpdatedAt,
+    })
+  }
+
+  for (const terminal of terminalRecords()) {
+    if (!terminal.workstreamId || !workstreamById.has(terminal.workstreamId)) continue
+    const workstream = workstreamById.get(terminal.workstreamId)!
+    if (terminal.status === 'running' && terminal.needsInput) {
+      let question: string | undefined
+      try { question = decisionQuestion(decisionPromptFromLog(readTerminalLog(terminal.id, 12_000).data)) } catch { /* The inbox still shows a waiting agent if its log is unavailable. */ }
+      items.push({
+        id: `needs-input:${terminal.id}`,
+        workstreamId: workstream.id,
+        terminalId: terminal.id,
+        kind: 'needs_input',
+        priority: 'urgent',
+        title: workstream.name,
+        reason: `${terminalKindLabel(terminal.kind)} is waiting for your input.`,
+        question,
+        since: terminal.lastActivityAt ?? terminal.startedAt,
+        agentKind: terminal.kind,
+      })
+    } else if (terminal.status === 'exited' && terminal.kind !== 'shell' && terminal.userInteracted) {
+      items.push({
+        id: `agent-exited:${terminal.id}`,
+        workstreamId: workstream.id,
+        terminalId: terminal.id,
+        kind: 'agent_exited',
+        priority: 'review',
+        title: workstream.name,
+        reason: terminal.exitCode && terminal.exitCode !== 0
+          ? `${terminalKindLabel(terminal.kind)} exited with code ${terminal.exitCode}.`
+          : `${terminalKindLabel(terminal.kind)} finished; its result is ready to review.`,
+        since: terminal.endedAt ?? terminal.lastActivityAt ?? terminal.startedAt,
+        agentKind: terminal.kind,
+      })
+    }
+  }
+
+  const rank = { urgent: 0, review: 1 }
+  return items.sort((left, right) => (
+    rank[left.priority] - rank[right.priority] || right.since.localeCompare(left.since)
+  ))
+}
+
+async function inspectRepository(rawPath: string) {
+  const resolvedPath = path.resolve(rawPath)
+  try {
+    await execFileAsync('git', ['-C', resolvedPath, 'rev-parse', '--show-toplevel'], { timeout: 5000 })
+    const [branchResult, headResult, statusResult] = await Promise.all([
+      execFileAsync('git', ['-C', resolvedPath, 'branch', '--show-current'], { timeout: 5000 }),
+      execFileAsync('git', ['-C', resolvedPath, 'rev-parse', '--short=12', 'HEAD'], { timeout: 5000 }),
+      execFileAsync('git', ['-C', resolvedPath, 'status', '--porcelain=v1'], { timeout: 5000, maxBuffer: 1024 * 1024 }),
+    ])
+    const branch = branchResult.stdout.trim() || undefined
+    const head = headResult.stdout.trim() || undefined
+    const changedFileCount = statusResult.stdout.split('\n').filter(Boolean).length
+    return {
+      path: resolvedPath,
+      isRepository: true,
+      branch,
+      head,
+      changedFileCount,
+      fingerprint: createHash('sha256').update(`${branch ?? ''}\n${head ?? ''}\n${statusResult.stdout}`).digest('hex'),
+      summary: `${branch ?? 'detached HEAD'}${head ? ` · ${head}` : ''} · ${changedFileCount ? `${changedFileCount} changed file${changedFileCount === 1 ? '' : 's'}` : 'clean'}`,
+    }
+  } catch {
+    return {
+      path: resolvedPath,
+      isRepository: false,
+      changedFileCount: 0,
+      summary: 'Git state unavailable for this directory.',
+    }
+  }
+}
+
 async function buildSessionDetail(sessionId: string): Promise<SessionDetail | null> {
   // A project detail request establishes the generation shown by the renderer.
   // Session details should reuse it even after the short discovery TTL expires;
@@ -683,6 +831,23 @@ function expandDirectoryInput(input: string) {
   if (input.startsWith('~/')) return path.join(os.homedir(), input.slice(2))
   if (path.isAbsolute(input)) return input
   return path.resolve(os.homedir(), input)
+}
+
+async function inspectDirectoryInput(input: string) {
+  const resolvedPath = path.resolve(expandDirectoryInput(input.trim()))
+  try {
+    const details = await stat(resolvedPath)
+    return { input, path: resolvedPath, exists: true, isDirectory: details.isDirectory() }
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : undefined
+    return {
+      input,
+      path: resolvedPath,
+      exists: false,
+      isDirectory: false,
+      error: code === 'ENOENT' ? undefined : error instanceof Error ? error.message : String(error),
+    }
+  }
 }
 
 function displayDirectoryCompletion(input: string, absolutePath: string) {
@@ -752,13 +917,38 @@ const server = http.createServer(async (req, res) => {
       return
     }
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ ok: true, service: 'gogoagent-sidecar', lastActivity: getLastActivity() }))
+    res.end(JSON.stringify({ ok: true, service: 'gogoagent-sidecar', lastActivity: getLastActivity(), workstreamViewRevision: getWorkstreamViewRevision() }))
     return
   }
 
   if (!requestIsAuthorized(req, url)) {
     res.writeHead(401, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ error: 'Unauthorized' }))
+    return
+  }
+
+  if (url.pathname === '/mobile/status' && req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(getMobileGatewayStatus()))
+    return
+  }
+
+  if (url.pathname === '/mobile/start' && req.method === 'POST') {
+    try {
+      const status = await startMobileGateway()
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(status))
+    } catch (error) {
+      res.writeHead(500, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Could not start phone access', detail: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
+
+  if (url.pathname === '/mobile/stop' && req.method === 'POST') {
+    const status = await stopMobileGateway()
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(status))
     return
   }
 
@@ -785,6 +975,20 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
+  if (url.pathname === '/fs/inspect-directory' && req.method === 'GET') {
+    const result = await inspectDirectoryInput(url.searchParams.get('input') ?? '')
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(result))
+    return
+  }
+
+  if (url.pathname === '/fs/repository-state' && req.method === 'GET') {
+    const result = await inspectRepository(url.searchParams.get('path') ?? os.homedir())
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(result))
+    return
+  }
+
   if (url.pathname === '/debug/rescan' && req.method === 'POST') {
     try {
       await buildSnapshot(true)
@@ -804,6 +1008,18 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       res.writeHead(500, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ error: 'Failed to build snapshot', detail: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
+
+  if (url.pathname === '/attention' && req.method === 'GET') {
+    try {
+      const snapshot = await buildSnapshot()
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ items: buildAttentionItems(snapshot) }))
+    } catch (error) {
+      res.writeHead(500, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Failed to build attention inbox', detail: error instanceof Error ? error.message : String(error) }))
     }
     return
   }
@@ -856,7 +1072,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  const terminalMatch = url.pathname.match(/^\/terminals\/([^/]+)\/(log|write|resize|kill|close)$/)
+  const terminalMatch = url.pathname.match(/^\/terminals\/([^/]+)\/(log|decision|write|respond|resize|kill|close)$/)
   if (terminalMatch) {
     const id = decodeURIComponent(terminalMatch[1])
     const action = terminalMatch[2]
@@ -875,6 +1091,16 @@ const server = http.createServer(async (req, res) => {
         return
       }
 
+      if (action === 'decision' && req.method === 'GET') {
+        const terminal = terminalRecords().find((record) => record.id === id)
+        const waiting = terminal?.status === 'running' && terminal.kind !== 'shell' && terminal.needsInput === true
+        const storedReceipt = decisionReceipts.get(id)
+        const receipt = storedReceipt && terminal ? { ...storedReceipt, terminalStatus: terminal.status } : null
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ waiting, prompt: waiting ? decisionPromptFromLog(readTerminalLog(id, 12_000).data) : null, receipt }))
+        return
+      }
+
       if (action === 'write' && req.method === 'POST') {
         const body = await readJsonBody(req)
         const interactionRecorded = writeTerminal(id, typeof body?.data === 'string' ? body.data : '')
@@ -884,6 +1110,62 @@ const server = http.createServer(async (req, res) => {
         }
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: true }))
+        return
+      }
+
+      if (action === 'respond' && req.method === 'POST') {
+        const terminal = terminalRecords().find((record) => record.id === id)
+        if (!terminal || terminal.status !== 'running' || terminal.kind === 'shell') {
+          res.writeHead(409, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: 'Terminal is not accepting agent feedback' }))
+          return
+        }
+        const body = await readJsonBody(req)
+        const rawText = typeof body?.text === 'string' ? body.text : ''
+        const text = rawText
+          .replace(/\r\n/g, '\n')
+          .replace(/\r/g, '\n')
+          .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+          .trim()
+          .slice(0, 4000)
+        if (!text) {
+          res.writeHead(400, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: 'Feedback is empty' }))
+          return
+        }
+        const submit = body?.submit !== false
+        const isQuickChoice = body?.choice === true && /^(?:[1-9]\d?|y|n)$/i.test(text)
+        const decisionId = typeof body?.decisionId === 'string' ? body.decisionId : undefined
+        let reviewedChoice: { value: string; label: string } | undefined
+        if (body?.choice === true && decisionId) {
+          const current = decisionPromptFromLog(readTerminalLog(id, 12_000).data)
+          reviewedChoice = current.choices.find((choice) => choice.value === text)
+          if (!terminal.needsInput || current.id !== decisionId || !reviewedChoice) {
+            res.writeHead(409, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ error: 'Approval prompt changed. Review the current terminal output before choosing.' }))
+            return
+          }
+        }
+        const input = isQuickChoice
+          ? `${text}${submit ? '\r' : ''}`
+          : `\x1b[200~${text}\x1b[201~${submit ? '\r' : ''}`
+        const previousReceipt = decisionReceipts.get(id)
+        if (reviewedChoice && submit && decisionId) decisionReceipts.set(id, {
+          choiceValue: text,
+          choiceLabel: reviewedChoice.label,
+          promptId: decisionId,
+          sentAt: new Date().toISOString(),
+        })
+        let interactionRecorded: boolean
+        try { interactionRecorded = writeTerminal(id, input) } catch (error) {
+          if (previousReceipt) decisionReceipts.set(id, previousReceipt)
+          else decisionReceipts.delete(id)
+          throw error
+        }
+        if (interactionRecorded) snapshotCache = null
+        recordActivity(`Sent reviewed feedback to ${terminalKindLabel(terminal.kind)}`)
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ ok: true, submitted: submit, receipt: decisionReceipts.get(id) ? { ...decisionReceipts.get(id), terminalStatus: terminal.status } : null }))
         return
       }
 
@@ -994,6 +1276,121 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       res.writeHead(500, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ error: 'Failed to rename workstream', detail: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
+
+  const workstreamStateMatch = url.pathname.match(/^\/workstreams\/([^/]+)\/state$/)
+  if (workstreamStateMatch && req.method === 'PATCH') {
+    try {
+      const workstreamId = decodeURIComponent(workstreamStateMatch[1])
+      const currentSnapshot = await buildSnapshot()
+      if (!currentSnapshot.workstreams.some((workstream) => workstream.id === workstreamId)) {
+        res.writeHead(404, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Workstream not found' }))
+        return
+      }
+      const body = await readJsonBody(req)
+      const fields = ['goal', 'currentState', 'blocker', 'nextAction', 'lastVerification'] as const
+      const patch: Partial<Omit<WorkstreamState, 'workstreamId' | 'updatedAt'>> = {}
+      for (const field of fields) {
+        if (typeof body?.[field] === 'string') patch[field] = body[field]
+      }
+      await setWorkstreamState(workstreamId, patch)
+      snapshotCache = null
+      const snapshot = await buildSnapshot(true)
+      const project = snapshot.workstreams.find((workstream) => workstream.id === workstreamId)
+      if (!project) throw new Error('Updated workstream was not found after rescan')
+      recordActivity(`Updated state for ${project.name}`)
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ project }))
+    } catch (error) {
+      res.writeHead(500, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Failed to update workstream state', detail: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
+
+  const workstreamViewMatch = url.pathname.match(/^\/workstreams\/([^/]+)\/view$/)
+  if (workstreamViewMatch && req.method === 'POST') {
+    const workstreamId = decodeURIComponent(workstreamViewMatch[1])
+    const snapshot = await buildSnapshot()
+    if (!snapshot.workstreams.some((workstream) => workstream.id === workstreamId && !workstream.archivedAt)) {
+      res.writeHead(404, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Workstream not found' }))
+      return
+    }
+    const body = await readJsonBody(req)
+    const terminalId = typeof body?.terminalId === 'string'
+      && terminalRecords().some((terminal) => terminal.id === body.terminalId && terminal.workstreamId === workstreamId)
+      ? body.terminalId : undefined
+    const view = await markWorkstreamViewed(workstreamId, terminalId)
+    snapshotCache = null
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ view }))
+    return
+  }
+
+  const continuationMatch = url.pathname.match(/^\/workstreams\/([^/]+)\/continuation$/)
+  if (continuationMatch && (req.method === 'GET' || req.method === 'POST')) {
+    const workstreamId = decodeURIComponent(continuationMatch[1])
+    const detail = await buildProjectDetail(workstreamId)
+    if (!detail || detail.project.archivedAt) {
+      res.writeHead(404, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Workstream not found' }))
+      return
+    }
+    const sessions = detail.sessions.filter((session) => !session.id.startsWith('terminal-') && (
+      session.agentKind === 'codex'
+      || (session.agentKind !== 'shell' && session.transcriptPath.toLowerCase().includes('/.claude/projects/'))
+    )).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    const repository = await inspectRepository(detail.project.repoRoot)
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ project: detail.project, sessions, repository }))
+      return
+    }
+    const body = await readJsonBody(req)
+    const session = sessions.find((candidate) => candidate.id === body?.sessionId)
+    if (!session || typeof body?.repositoryFingerprint !== 'string') {
+      res.writeHead(400, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Choose a discovered Claude or Codex session to resume.' }))
+      return
+    }
+    if (body.repositoryFingerprint !== (repository.fingerprint ?? 'unavailable')) {
+      res.writeHead(409, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Repository state changed. Review it again before continuing.' }))
+      return
+    }
+    if (terminalRecords().some((terminal) => terminal.status === 'running' && terminal.resumeSessionId === session.id)) {
+      res.writeHead(409, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'This session is already running.' }))
+      return
+    }
+    try {
+      if (!(await stat(session.cwd)).isDirectory()) throw new Error('Missing session directory')
+    } catch {
+      res.writeHead(409, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'The session directory is no longer available.' }))
+      return
+    }
+    try {
+      const kind = session.agentKind === 'codex' ? 'codex' : 'claude'
+      const terminal = createTerminal({
+        kind,
+        cwd: session.cwd,
+        workstreamId,
+        gitBranch: detail.project.branch,
+        resumeSessionId: session.id,
+        title: `${terminalKindLabel(kind)} · ${detail.project.name}`,
+      })
+      snapshotCache = null
+      recordActivity(`Resumed ${terminalKindLabel(kind)} in ${detail.project.name}`)
+      res.writeHead(201, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ terminal }))
+    } catch (error) {
+      res.writeHead(500, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Failed to resume session', detail: error instanceof Error ? error.message : String(error) }))
     }
     return
   }
@@ -1296,6 +1693,7 @@ function shutdown(signal: NodeJS.Signals) {
   if (shuttingDown) return
   shuttingDown = true
   console.log(`[gogoagent/sidecar] received ${signal}, shutting down`)
+  stopMobileGatewayOnExit()
   server.close(() => {
     void unlink(authTokenPath).catch(() => undefined).finally(() => process.exit(0))
   })

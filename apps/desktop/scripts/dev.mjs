@@ -117,13 +117,12 @@ function killChild(child, signal = 'SIGTERM') {
   }
 }
 
-// Desktop's build script builds shared first, so this avoids a duplicate
-// shared build before every dev launch.
-// We intentionally skip sidecar here; its build may be broken during refactors
-// and shouldn't block launching the app.
+// Build both browser surfaces before launch so Connect phone can start its
+// gateway without a second setup step. We intentionally skip sidecar here;
+// its build may be broken during refactors and shouldn't block launching the app.
 const build = run(
   'corepack',
-  ['pnpm', '--filter', '@gogoagent/desktop', 'build'],
+  ['pnpm', 'build:ui'],
   workspaceRoot
 )
 

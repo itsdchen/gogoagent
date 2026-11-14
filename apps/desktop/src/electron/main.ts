@@ -1,4 +1,5 @@
 import { BrowserWindow, Menu, app, dialog, ipcMain, type Event as ElectronEvent, type Input } from 'electron'
+import { createHash } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,6 +22,7 @@ if (screenshotDirectory) {
 }
 
 ipcMain.handle(SELECT_DIRECTORY_CHANNEL, async (event, defaultPath?: unknown) => {
+  if (process.env.GOGOAGENT_REMOTE_ATTACH === '1') return null
   const window = BrowserWindow.fromWebContents(event.sender)
   const options = {
     properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>,
@@ -31,6 +33,7 @@ ipcMain.handle(SELECT_DIRECTORY_CHANNEL, async (event, defaultPath?: unknown) =>
     : await dialog.showOpenDialog(options)
   return result.canceled ? null : result.filePaths[0] ?? null
 })
+
 
 function clampZoomLevel(level: number) {
   return Math.min(MAX_ZOOM_LEVEL, Math.max(MIN_ZOOM_LEVEL, level))
@@ -121,10 +124,30 @@ async function captureDemoScreenshots(window: BrowserWindow) {
 
   const launcher = await window.webContents.capturePage()
   await writeFile(path.join(screenshotDirectory, 'launcher.png'), launcher.toPNG())
+
+  if (process.env.GOGOAGENT_CAPTURE_PHONE === '1') {
+    await window.webContents.executeJavaScript(`document.querySelector('#phone-toggle')?.click()`)
+    await waitForRenderer(window, `Boolean(document.querySelector('#phone-dialog')?.open)`)
+    await window.webContents.executeJavaScript(`document.querySelector('#phone-start-button')?.click()`)
+    await waitForRenderer(window, `
+      !document.querySelector('#phone-online')?.classList.contains('hidden') &&
+      Boolean(document.querySelector('#phone-qr-image')?.getAttribute('src')) &&
+      document.querySelector('#phone-pairing-code')?.textContent?.trim() !== '—'
+    `)
+    await delay(250)
+    const phone = await window.webContents.capturePage()
+    await writeFile(path.join(screenshotDirectory, 'phone.png'), phone.toPNG())
+    await window.webContents.executeJavaScript(`document.querySelector('#phone-stop-button')?.click()`)
+    await waitForRenderer(window, `!document.querySelector('#phone-offline')?.classList.contains('hidden')`)
+  }
   app.quit()
 }
 
 function createWindow() {
+  const remoteTarget = process.env.GOGOAGENT_REMOTE_ATTACH === '1' ? process.env.GOGOAGENT_REMOTE_TARGET : undefined
+  const partition = remoteTarget
+    ? `persist:gogoagent-remote-${createHash('sha256').update(remoteTarget).digest('hex').slice(0, 16)}`
+    : undefined
   const window = new BrowserWindow({
     width: screenshotDirectory ? 1440 : 1200,
     height: screenshotDirectory ? 960 : 800,
@@ -132,6 +155,7 @@ function createWindow() {
     minHeight: 640,
     backgroundColor: '#0b1020',
     webPreferences: {
+      ...(partition ? { partition } : {}),
       preload: path.join(__dirname, 'preload.cjs'),
       // The preload owns the loopback auth token and uses Node APIs for the
       // narrow sidecar bridge. The renderer remains isolated and has no Node.
@@ -139,7 +163,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    title: 'gogoagent',
+    title: remoteTarget ? `gogoagent · ${remoteTarget}` : 'gogoagent',
   })
 
   setWindowZoom(window, appZoomLevel)

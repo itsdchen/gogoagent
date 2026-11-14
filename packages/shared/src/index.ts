@@ -21,6 +21,7 @@ export interface ProjectRecord {
 export interface SessionRecord {
   id: string
   projectId: string
+  agentKind?: 'claude' | 'codex' | 'shell'
   workstreamId?: string
   title: string
   cwd: string
@@ -142,6 +143,62 @@ export interface RefineJobStatus {
   finishedAt?: string
 }
 
+export interface WorkstreamState {
+  workstreamId: string
+  goal?: string
+  currentState?: string
+  blocker?: string
+  nextAction?: string
+  lastVerification?: string
+  updatedAt?: string
+}
+
+export interface WorkstreamView {
+  viewedAt: string
+  terminalId?: string
+}
+
+export type AttentionKind = 'needs_input' | 'agent_exited' | 'blocked'
+export type AttentionPriority = 'urgent' | 'review'
+
+export interface AttentionItem {
+  id: string
+  workstreamId: string
+  terminalId?: string
+  kind: AttentionKind
+  priority: AttentionPriority
+  title: string
+  reason: string
+  question?: string
+  since: string
+  agentKind?: 'claude' | 'codex' | 'shell'
+}
+
+export interface TerminalDecisionReceipt {
+  choiceValue: string
+  choiceLabel: string
+  promptId: string
+  sentAt: string
+  outputAt?: string
+  terminalStatus: 'running' | 'exited'
+}
+
+export interface TerminalDecision {
+  waiting: boolean
+  prompt: { id: string; excerpt: string; choices: { value: string; label: string }[] } | null
+  receipt: TerminalDecisionReceipt | null
+}
+
+export interface RepositoryState {
+  path: string
+  isRepository: boolean
+  branch?: string
+  head?: string
+  changedFileCount: number
+  fingerprint?: string
+  summary: string
+}
+
 // A Project is the user-facing unit of work: N Claude sessions on the same
 // repo + branch whose time windows are within the gap threshold. Sessions are
 // just Claude Code's accidental restart boundary, not meaningful on their own.
@@ -162,6 +219,9 @@ export interface Project {
   activeTerminalIds?: string[]
   needsInputTerminalIds?: string[]
   archivedAt?: string
+  state?: WorkstreamState
+  view?: WorkstreamView
+  newSinceLastView?: boolean
 }
 
 export interface ProjectDetail {
@@ -239,4 +299,5 @@ export interface HealthResponse {
   ok: boolean
   service: string
   lastActivity?: ActivityEntry
+  workstreamViewRevision?: number
 }

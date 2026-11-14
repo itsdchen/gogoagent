@@ -398,6 +398,9 @@ try {
 
   await access(path.join(outputDirectory, 'overview.png'))
   await access(path.join(outputDirectory, 'launcher.png'))
+  if (process.env.GOGOAGENT_CAPTURE_PHONE === '1') {
+    await access(path.join(outputDirectory, 'phone.png'))
+  }
   console.log(`[gogoagent/screenshots] wrote synthetic screenshots to ${outputDirectory}`)
   console.log('[gogoagent/screenshots] no real Claude history, gogoagent state, repositories, or terminal logs were read.')
 } finally {

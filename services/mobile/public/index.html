@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#111827" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css?v=20261020-2" />
+    <title>gogoagent mobile</title>
+  </head>
+  <body>
+    <main id="pair-view" class="pair-view">
+      <section class="pair-card" aria-labelledby="pair-title">
+        <div class="brand-mark" aria-hidden="true">go</div>
+        <p class="eyebrow">gogoagent mobile</p>
+        <h1 id="pair-title">Connect to your console</h1>
+        <p class="muted">Enter the six-digit code shown where you started the mobile gateway.</p>
+        <form id="pair-form">
+          <label for="pair-code">Pairing code</label>
+          <input
+            id="pair-code"
+            name="code"
+            class="pair-code"
+            type="text"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            pattern="[0-9]{6}"
+            maxlength="6"
+            placeholder="000000"
+            required
+          />
+          <button class="primary wide" type="submit">Pair phone</button>
+        </form>
+        <p id="pair-status" class="status" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <div id="app-view" class="app-view" hidden>
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">gogoagent</p>
+          <h1>Workstreams</h1>
+        </div>
+        <div class="header-actions">
+          <span id="connection-status" class="connection" role="status">Connecting</span>
+          <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh">↻</button>
+        </div>
+      </header>
+
+      <main class="shell">
+        <div id="list-view">
+          <section aria-labelledby="attention-title">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Attention inbox</p>
+                <h2 id="attention-title">Needs you</h2>
+              </div>
+              <span id="attention-count" class="count">0</span>
+            </div>
+            <div id="attention-list" class="card-list"></div>
+          </section>
+
+          <section aria-labelledby="workstreams-title">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">All activity</p>
+                <h2 id="workstreams-title">Workstreams</h2>
+              </div>
+            </div>
+            <div id="workstream-list" class="card-list"></div>
+          </section>
+
+          <details id="exited-agents" class="exited-agents" hidden>
+            <summary>Exited agents <span id="exited-count">0</span></summary>
+            <div id="exited-list" class="card-list"></div>
+          </details>
+        </div>
+
+        <div id="detail-view" class="workspace" hidden>
+          <header class="workspace-header">
+            <button id="back-button" class="workspace-button" type="button" aria-label="All workstreams">←</button>
+            <div class="workspace-heading">
+              <h2 id="detail-title">Workstream</h2>
+              <span id="workspace-connection" class="connection" role="status">Connecting</span>
+            </div>
+            <button id="continue-button" class="workspace-button" type="button" disabled>Continue</button>
+            <button id="context-button" class="workspace-button" type="button">Context</button>
+          </header>
+          <p id="detail-update" class="muted small" hidden></p>
+          <p id="workspace-empty" class="empty-card" hidden>No terminals in this workstream. Open Context to review its state.</p>
+          <section id="terminal-panel" class="terminal-panel" aria-labelledby="terminal-title" hidden>
+            <div class="terminal-heading">
+              <button id="switch-agent-button" class="agent-switcher" type="button" aria-label="Switch agent">
+                <span id="terminal-kind" class="eyebrow"></span>
+                <span id="terminal-title">Terminal</span><span aria-hidden="true"> ▾</span>
+              </button>
+              <span id="terminal-status" class="pill"></span>
+              <button id="display-button" class="workspace-button" type="button" aria-label="Terminal display settings">Aa</button>
+            </div>
+            <section id="decision-card" class="decision-card" aria-labelledby="decision-title" hidden>
+              <div class="decision-heading"><span class="decision-dot" aria-hidden="true"></span><h3 id="decision-title">Waiting for your decision</h3></div>
+              <p class="decision-label">Agent prompt</p>
+              <p id="decision-prompt" class="decision-prompt"></p>
+              <div class="decision-context">
+                <p><strong>Workstream goal</strong><span id="decision-goal"></span></p>
+                <p><strong>Saved next step</strong><span id="decision-next"></span></p>
+              </div>
+              <p id="decision-note" class="decision-note"></p>
+              <div id="quick-choices" class="quick-choices" hidden>
+                <div id="choice-buttons" class="choice-buttons" aria-label="Respond to the current agent prompt"></div>
+              </div>
+            </section>
+            <section id="decision-receipt" class="decision-receipt" aria-labelledby="receipt-title" hidden>
+              <div class="receipt-heading"><strong id="receipt-title">Last choice sent</strong><span id="receipt-time"></span></div>
+              <p id="receipt-choice"></p>
+              <p id="receipt-status"></p>
+              <button id="receipt-view-output" class="secondary" type="button">View latest output ↓</button>
+            </section>
+            <div class="output-area">
+              <pre id="terminal-output" class="terminal-output" tabindex="0" aria-label="Terminal output"></pre>
+              <button id="terminal-latest" class="secondary latest-button" type="button" hidden>Latest ↓</button>
+            </div>
+            <form id="feedback-form" class="feedback-form">
+              <div class="composer-heading">
+                <label id="input-label" for="feedback-text">Terminal input</label>
+                <button id="next-agent-button" class="text-button" type="button" hidden>Next waiting →</button>
+              </div>
+              <div class="composer-row">
+                <textarea id="feedback-text" name="feedback" rows="1" maxlength="4000"
+                  placeholder="Message this agent…" aria-describedby="terminal-input-help"></textarea>
+                <button id="send-feedback-button" class="primary" type="submit" aria-label="Send to terminal">Send</button>
+              </div>
+              <span id="terminal-input-help" class="sr-only">Sends your message to this agent and presses Enter.</span>
+              <p id="feedback-status" class="status" role="status" aria-live="polite"></p>
+            </form>
+          </section>
+        </div>
+      </main>
+
+      <footer class="app-footer">
+        <p>Phone access can answer agents and resume reviewed Claude or Codex sessions.</p>
+        <button id="signout-button" class="text-button" type="button">Unpair this phone</button>
+      </footer>
+    </div>
+
+    <dialog id="context-dialog" class="sheet" aria-labelledby="context-title">
+      <div class="sheet-heading">
+        <h2 id="context-title">Workstream context</h2>
+        <button class="workspace-button" type="button" data-close-sheet aria-label="Close context">✕</button>
+      </div>
+      <p id="detail-path" class="eyebrow"></p>
+      <p id="detail-status" class="muted context-path"></p>
+          <section class="panel" aria-labelledby="state-title">
+            <div class="panel-heading">
+              <h3 id="state-title">State capsule</h3>
+              <button id="edit-state-button" class="secondary compact" type="button">Edit</button>
+            </div>
+            <dl id="state-summary" class="state-summary"></dl>
+            <form id="state-form" class="state-form" hidden>
+              <label for="state-goal">Goal</label>
+              <textarea id="state-goal" name="goal" rows="2"></textarea>
+              <label for="state-current">Current state</label>
+              <textarea id="state-current" name="current" rows="3"></textarea>
+              <label for="state-blocker">Blocker or question</label>
+              <textarea id="state-blocker" name="blocker" rows="2"></textarea>
+              <label for="state-next">Next step</label>
+              <textarea id="state-next" name="next" rows="2"></textarea>
+              <label for="state-verification">Last verification</label>
+              <textarea id="state-verification" name="verification" rows="2"></textarea>
+              <div class="button-row">
+                <button class="primary" type="submit">Save state</button>
+                <button id="cancel-state-button" class="secondary" type="button">Cancel</button>
+              </div>
+              <p id="state-form-status" class="status" role="status" aria-live="polite"></p>
+            </form>
+          </section>
+
+    </dialog>
+    <dialog id="continuation-dialog" class="sheet" aria-labelledby="continuation-title">
+      <div class="sheet-heading">
+        <h2 id="continuation-title">Continue workstream</h2>
+        <button class="workspace-button" type="button" data-close-sheet aria-label="Close continuation review">✕</button>
+      </div>
+      <p class="muted small">Review the session, handoff, and repository before resuming an agent.</p>
+      <form id="continuation-form">
+        <label for="continuation-session">Session to resume</label>
+        <select id="continuation-session" required></select>
+        <dl id="continuation-state" class="state-summary"></dl>
+        <p id="continuation-repository" class="muted context-path"></p>
+        <button id="continuation-submit" class="primary wide" type="submit">Resume session</button>
+        <p id="continuation-status" class="status" role="status" aria-live="polite"></p>
+      </form>
+    </dialog>
+    <dialog id="agents-dialog" class="sheet" aria-labelledby="terminals-title">
+      <div class="sheet-heading">
+        <h2 id="terminals-title">Switch agent</h2>
+        <button class="workspace-button" type="button" data-close-sheet aria-label="Close agent switcher">✕</button>
+      </div>
+      <div id="terminal-list" class="terminal-list"></div>
+    </dialog>
+    <dialog id="display-dialog" class="sheet" aria-labelledby="display-title">
+      <div class="sheet-heading">
+        <h2 id="display-title">Terminal display</h2>
+        <button class="workspace-button" type="button" data-close-sheet aria-label="Close display settings">✕</button>
+      </div>
+      <div class="terminal-toolbar" role="group" aria-label="Terminal text size">
+        <span>Text size</span>
+        <div class="terminal-text-controls">
+          <button id="terminal-text-smaller" class="secondary" type="button" aria-label="Smaller terminal text">A−</button>
+          <output id="terminal-text-size" aria-live="polite">11 px</output>
+          <button id="terminal-text-larger" class="secondary" type="button" aria-label="Larger terminal text">A+</button>
+        </div>
+      </div>
+      <label class="wrap-setting"><input id="terminal-wrap" type="checkbox" checked /> Wrap long lines</label>
+      <label class="wrap-setting"><input id="terminal-sections" type="checkbox" checked /> Separate output blocks</label>
+      <p class="muted small">Dividers follow paragraph breaks and visible prompt markers.</p>
+    </dialog>
+
+    <script src="/app.js?v=20261020-2" defer></script>
+  </body>
+</html>

@@ -104,7 +104,9 @@ function makeTerminalCommand(kind: TerminalKind, input: CreateTerminalInput) {
     const commandLine = resumeSessionId ? `claude --resume ${shellArg(resumeSessionId)}` : 'claude'
     return { command: shell, args: ['-lc', commandLine], label: 'claude' }
   }
-  return { command: shell, args: ['-lc', 'codex'], label: 'codex' }
+  const resumeSessionId = input.resumeSessionId?.trim()
+  const commandLine = resumeSessionId ? `codex resume ${shellArg(resumeSessionId)}` : 'codex'
+  return { command: shell, args: ['-lc', commandLine], label: 'codex' }
 }
 
 function terminalLogRoot() {
@@ -376,7 +378,7 @@ export function createTerminal(input: CreateTerminalInput) {
     cwd,
     workstreamId,
     gitBranch: input.gitBranch,
-    resumeSessionId: kind === 'claude' ? input.resumeSessionId?.trim() || undefined : undefined,
+    resumeSessionId: kind === 'claude' || kind === 'codex' ? input.resumeSessionId?.trim() || undefined : undefined,
     command: [command, ...args].join(' '),
     status: 'running',
     userInteracted: false,

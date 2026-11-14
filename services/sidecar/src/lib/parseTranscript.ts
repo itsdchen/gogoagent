@@ -349,6 +349,7 @@ export async function parseTranscript(
     session: {
       id: sessionId,
       projectId,
+      agentKind: 'claude',
       title,
       cwd,
       transcriptPath,

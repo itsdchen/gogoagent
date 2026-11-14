@@ -45,7 +45,11 @@ async function waitForHealth(baseUrl, childOutput) {
 async function requestJson(baseUrl, authToken, pathName, options = {}) {
   const response = await fetch(`${baseUrl}${pathName}`, {
     method: options.method ?? 'GET',
-    headers: { authorization: `Bearer ${authToken}` },
+    headers: {
+      authorization: `Bearer ${authToken}`,
+      ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
+    },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
   })
   if (!response.ok) throw new Error(`${pathName} returned ${response.status}: ${await response.text()}`)
   return response.json()
@@ -222,6 +226,13 @@ async function main() {
   let output = ''
 
   try {
+    const fakeAgentShell = path.join(testHome, 'synthetic-agent-shell')
+    await writeFile(fakeAgentShell, `#!/bin/sh
+printf 'Approval required. Approve this test command?\\n1. Yes, continue\\n2. No, stop\\nEnter choice: '
+IFS= read -r choice
+printf '\\nAgent received: %s\\n' "$choice"
+sleep 1
+`, { mode: 0o755 })
     const port = await reservePort()
     const baseUrl = `http://127.0.0.1:${port}`
     sidecar = spawn(process.execPath, ['services/sidecar/dist/services/sidecar/src/index.js'], {
@@ -229,6 +240,7 @@ async function main() {
       env: {
         ...process.env,
         HOME: testHome,
+        SHELL: fakeAgentShell,
         GOGOAGENT_PORT: String(port),
         GOGOAGENT_SNAPSHOT_CACHE_MS: '0',
       },
@@ -249,6 +261,13 @@ async function main() {
       headers: { authorization: `Bearer ${token}` },
     })
     assert.equal(authenticatedHealth.status, 200, 'health should accept the current sidecar token')
+
+    const remoteHome = await requestJson(baseUrl, token, '/fs/inspect-directory?input=~')
+    assert.equal(remoteHome.path, testHome, 'directory inspection should use the sidecar machine home')
+    assert.equal(remoteHome.isDirectory, true)
+    const remoteMissing = await requestJson(baseUrl, token, '/fs/inspect-directory?input=missing-project')
+    assert.equal(remoteMissing.path, path.join(testHome, 'missing-project'))
+    assert.equal(remoteMissing.exists, false)
 
     const emptySnapshot = await requestJson(baseUrl, token, '/snapshot')
     assert.equal(emptySnapshot.sessions.length, 0, 'a clean home should have no sessions')
@@ -274,6 +293,72 @@ async function main() {
     assert.match(populatedSnapshot.workstreams[0].name, /clean-start fixture/i)
 
     const projectId = populatedSnapshot.workstreams[0].id
+    const savedState = await requestJson(baseUrl, token, `/workstreams/${encodeURIComponent(projectId)}/state`, {
+      method: 'PATCH',
+      body: {
+        goal: 'Verify shared workstream state.',
+        currentState: 'Smoke test is exercising the sidecar API.',
+        blocker: 'Review the synthetic blocker.',
+        nextAction: 'Clear the blocker after checking attention.',
+        lastVerification: 'Discovery smoke fixture loaded.',
+      },
+    })
+    assert.equal(savedState.project.state.goal, 'Verify shared workstream state.')
+    const attention = await requestJson(baseUrl, token, '/attention')
+    assert.equal(attention.items.length, 1, 'saved blocker should appear in the attention inbox')
+    assert.equal(attention.items[0].kind, 'blocked')
+    await requestJson(baseUrl, token, `/workstreams/${encodeURIComponent(projectId)}/state`, {
+      method: 'PATCH',
+      body: { blocker: '' },
+    })
+    const clearedAttention = await requestJson(baseUrl, token, '/attention')
+    assert.equal(clearedAttention.items.length, 0, 'cleared blocker should leave the attention inbox')
+
+    const agentTerminal = await requestJson(baseUrl, token, '/terminals', {
+      method: 'POST',
+      body: { kind: 'codex', cwd: testHome, workstreamId: projectId, title: 'Synthetic approval agent' },
+    })
+    let decision
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      decision = await requestJson(baseUrl, token, `/terminals/${encodeURIComponent(agentTerminal.id)}/decision`)
+      if (decision.waiting && decision.prompt?.choices.length === 2) break
+      await delay(50)
+    }
+    assert.equal(decision?.prompt?.choices.length, 2, 'synthetic agent should present two current choices')
+    const questionAttention = await requestJson(baseUrl, token, '/attention')
+    assert.equal(questionAttention.items.find((item) => item.terminalId === agentTerminal.id)?.question, 'Approval required. Approve this test command?')
+    const staleChoice = await fetch(`${baseUrl}/terminals/${encodeURIComponent(agentTerminal.id)}/respond`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ text: '1', choice: true, decisionId: 'stale-prompt' }),
+    })
+    assert.equal(staleChoice.status, 409, 'a stale choice must be rejected')
+    const selected = await requestJson(baseUrl, token, `/terminals/${encodeURIComponent(agentTerminal.id)}/respond`, {
+      method: 'POST',
+      body: { text: '1', choice: true, decisionId: decision.prompt.id },
+    })
+    assert.equal(selected.receipt.choiceLabel, '1. Yes, continue')
+    assert.equal(selected.receipt.choiceValue, '1')
+    let receiptStatus
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      receiptStatus = await requestJson(baseUrl, token, `/terminals/${encodeURIComponent(agentTerminal.id)}/decision`)
+      if (receiptStatus.receipt?.outputAt) break
+      await delay(50)
+    }
+    assert(receiptStatus.receipt.outputAt, 'terminal output should advance the shared receipt')
+    let agentLog
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      agentLog = await requestJson(baseUrl, token, `/terminals/${encodeURIComponent(agentTerminal.id)}/log`)
+      if (/Agent received: 1/.test(agentLog.data)) break
+      await delay(50)
+    }
+    assert.match(agentLog.data, /Agent received: 1/, 'choice should reach the synthetic terminal')
+    await requestJson(baseUrl, token, `/terminals/${encodeURIComponent(agentTerminal.id)}/close`, { method: 'POST' })
+
+    const repositoryState = await requestJson(baseUrl, token, `/fs/repository-state?path=${encodeURIComponent(repoRoot)}`)
+    assert.equal(repositoryState.isRepository, true, 'repository state endpoint should recognize the gogoagent checkout')
+    assert(repositoryState.fingerprint, 'repository state endpoint should return a comparison fingerprint')
+
     await requestJson(baseUrl, token, `/projects/${encodeURIComponent(projectId)}`)
     const beforeSessionDetail = await requestJson(baseUrl, token, '/debug/state')
     const sessionDetail = await requestJson(baseUrl, token, '/sessions/clean-start-session')
@@ -377,7 +462,12 @@ async function main() {
       headers: { authorization: `Bearer ${token}` },
     })
     assert.equal(oldTokenHealth.status, 401, 'restarted sidecar should reject the previous token')
-    await requestJson(baseUrl, rotatedToken, '/snapshot')
+    const restartedSnapshot = await requestJson(baseUrl, rotatedToken, '/snapshot')
+    assert.equal(
+      restartedSnapshot.workstreams.find((workstream) => workstream.id === projectId)?.state?.goal,
+      'Verify shared workstream state.',
+      'workstream state should survive a sidecar restart',
+    )
     await requestJson(baseUrl, rotatedToken, '/lessons/refined')
 
     const stateDir = path.join(testHome, '.gogoagent', 'state')
@@ -395,7 +485,7 @@ async function main() {
     await verifyNeedsInputDetection()
     await verifyTerminalLogCache(testHome)
 
-    console.log('Clean-start smoke test passed: discovery, auth restart, generation reuse, terminal caching, historical terminals, durable-state migration, label deduplication, and input detection work.')
+    console.log('Clean-start smoke test passed: discovery, auth restart, attention, approval question and receipt, stale-choice rejection, workstream state, repository inspection, generation reuse, terminal caching, historical terminals, durable-state migration, label deduplication, and input detection work.')
   } finally {
     await stop(sidecar)
     await rm(testHome, { recursive: true, force: true })

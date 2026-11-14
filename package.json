@@ -6,12 +6,20 @@
   "packageManager": "pnpm@10.6.0",
   "scripts": {
     "build": "corepack pnpm -r build",
+    "build:ui": "corepack pnpm --filter @gogoagent/mobile build && corepack pnpm --filter @gogoagent/desktop build",
     "dev": "corepack pnpm --filter @gogoagent/desktop dev",
     "lint": "corepack pnpm -r lint",
+    "mobile": "corepack pnpm --filter @gogoagent/mobile build && corepack pnpm --filter @gogoagent/mobile start",
     "screenshots:demo": "node scripts/capture-demo-screenshots.mjs",
     "test:clean-start": "corepack pnpm --filter @gogoagent/shared build && corepack pnpm --filter @gogoagent/sidecar build && node scripts/clean-start-smoke.mjs",
+    "test:remote-attach": "corepack pnpm --filter @gogoagent/shared build && corepack pnpm --filter @gogoagent/sidecar build && node scripts/remote-attach-smoke.mjs",
+    "test:codex-sessions": "corepack pnpm --filter @gogoagent/shared build && corepack pnpm --filter @gogoagent/sidecar build && node scripts/codex-sessions-smoke.mjs",
+    "test:decision-prompt": "node --experimental-strip-types scripts/decision-prompt-smoke.mjs",
     "test:launcher-port": "node scripts/launcher-port-smoke.mjs",
-    "typecheck": "corepack pnpm --filter @gogoagent/shared build && corepack pnpm --filter @gogoagent/shared typecheck && corepack pnpm --filter @gogoagent/sidecar typecheck && corepack pnpm --filter @gogoagent/desktop typecheck"
+    "test:mobile": "corepack pnpm --filter @gogoagent/mobile build && node scripts/mobile-smoke.mjs",
+    "test:mobile-lifecycle": "corepack pnpm --filter @gogoagent/mobile build && corepack pnpm --filter @gogoagent/sidecar build && node scripts/mobile-lifecycle-smoke.mjs",
+    "test:mobile-workspace": "node scripts/mobile-workspace-smoke.mjs",
+    "typecheck": "corepack pnpm --filter @gogoagent/shared build && corepack pnpm --filter @gogoagent/shared typecheck && corepack pnpm --filter @gogoagent/sidecar typecheck && corepack pnpm --filter @gogoagent/desktop typecheck && corepack pnpm --filter @gogoagent/mobile typecheck"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

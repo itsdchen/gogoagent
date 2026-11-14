@@ -233,6 +233,7 @@ export async function loadTerminalLogSessions(
           session: {
             id: sessionId,
             projectId,
+            agentKind: metadata.kind,
             workstreamId,
             title: terminalTitle(metadata, sessionId),
             cwd: metadata.cwd,

@@ -1,0 +1,17 @@
+{
+  "name": "gogoagent mobile",
+  "short_name": "gogoagent",
+  "description": "Review workstreams and respond to agents from your phone.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080d18",
+  "theme_color": "#111827",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

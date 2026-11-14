@@ -30,6 +30,15 @@ interface TerminalLogReplay {
   logPath?: string
 }
 
+interface MobileGatewayStatus {
+  running: boolean
+  pairingCode?: string
+  pairingTokenExpiresAt?: string
+  pairedDevices?: number
+  connections: Array<{ url: string; label: string; pairingUrl: string; qrDataUrl: string }>
+  error?: string
+}
+
 declare global {
   interface FitAddonInstance {
     activate: (terminal: unknown) => void
@@ -62,15 +71,18 @@ declare global {
     gogoagent: {
       system: {
         homeDirectory: string
+        remote: boolean
       }
       getHealth: () => Promise<import('@gogoagent/shared').HealthResponse>
       getSnapshot: () => Promise<import('@gogoagent/shared').SidecarSnapshot>
+      getAttention: () => Promise<import('@gogoagent/shared').AttentionItem[]>
       searchMessages: (
         query: string,
       ) => Promise<import('@gogoagent/shared').MessageSearchResponse>
       projects: {
         list: (options?: { archived?: boolean }) => Promise<import('@gogoagent/shared').Project[]>
         get: (projectId: string) => Promise<import('@gogoagent/shared').ProjectDetail>
+        markViewed: (projectId: string, terminalId?: string) => Promise<{ view: import('@gogoagent/shared').WorkstreamView }>
         suggestTitle: (projectId: string) => Promise<{ name: string; summary: string }>
       }
       sessions: {
@@ -79,16 +91,26 @@ declare global {
       files: {
         completeDirectory: (input: string) => Promise<{ input: string; completions: string[]; error?: string }>
         inspectDirectory: (input: string) => Promise<{ input: string; path: string; exists: boolean; isDirectory: boolean; error?: string }>
+        inspectRepository: (repoPath: string) => Promise<import('@gogoagent/shared').RepositoryState>
         selectDirectory: (defaultPath?: string) => Promise<string | null>
       }
       debug: {
         getState: () => Promise<import('@gogoagent/shared').DebugState>
         rescan: () => Promise<import('@gogoagent/shared').DebugState>
       }
+      mobile: {
+        getStatus: () => Promise<MobileGatewayStatus>
+        start: () => Promise<MobileGatewayStatus>
+        stop: () => Promise<MobileGatewayStatus>
+      }
       workstreams: {
         rename: (id: string, name: string) => Promise<{ project: import('@gogoagent/shared').Project }>
         archive: (id: string) => Promise<{ project: import('@gogoagent/shared').Project }>
         restore: (id: string) => Promise<{ project: import('@gogoagent/shared').Project }>
+        updateState: (
+          id: string,
+          state: Partial<Omit<import('@gogoagent/shared').WorkstreamState, 'workstreamId' | 'updatedAt'>>,
+        ) => Promise<{ project: import('@gogoagent/shared').Project }>
         label: (input: { projectIds?: string[]; force?: boolean }) => Promise<import('@gogoagent/shared').RefineJobStatus>
         getLabelStatus: (jobId: string) => Promise<import('@gogoagent/shared').RefineJobStatus>
       }
@@ -109,6 +131,8 @@ declare global {
         }) => Promise<TerminalSessionRecord>
         list: () => Promise<TerminalSessionRecord[]>
         readLog: (id: string, maxBytes?: number) => Promise<TerminalLogReplay>
+        getDecision: (id: string) => Promise<import('@gogoagent/shared').TerminalDecision>
+        respondChoice: (id: string, value: string, decisionId: string) => Promise<{ receipt: import('@gogoagent/shared').TerminalDecisionReceipt | null }>
         write: (id: string, data: string) => Promise<void>
         resize: (id: string, cols: number, rows: number) => Promise<void>
         kill: (id: string) => Promise<void>

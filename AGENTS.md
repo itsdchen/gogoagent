@@ -11,10 +11,10 @@ work, and leave it accurate when it hands off. Keep it short and never include
 tokens, private transcript contents, personal paths, or customer data.
 
 - Agent: Codex (current session)
-- Task: Add a temporary license notice for the public preview.
-- Started: 2026-07-21
-- Status / next step: The public-preview license notice is complete; commit and push the current branch.
-- Last verification: Documentation-only change; `git diff --check` passes.
+- Task: Ship remote and phone workflows with approval context and receipts.
+- Started: 2026-10-20
+- Status / next step: Complete; restart an older sidecar when live terminals can end to load the new routes.
+- Last verification: Typecheck, full build, decision parser, mobile gateway/browser, sidecar integration, and diff checks passed.
 
 ## Product
 
@@ -53,6 +53,8 @@ generated `dist/` and `node_modules/` content.
 
 - The sidecar owns live PTYs. Renderer-only restart should preserve them;
   sidecar exit intentionally ends them.
+- The sidecar owns the opt-in phone gateway. Closing the desktop leaves phone
+  access available; explicit Stop or sidecar exit ends the gateway.
 - Use `./start.sh` for the full app. `./start.sh --frontend` only works with a
   running gogoagent sidecar.
 - The sidecar is loopback-only and authenticates every route except `/health`

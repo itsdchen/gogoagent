@@ -23,6 +23,7 @@ usage() {
 Usage:
   ./start.sh              Start the full dev app: desktop + sidecar.
   ./start.sh --frontend   Restart only Electron/frontend; requires an existing sidecar.
+  ./start.sh --remote HOST  Run Electron here, attached to HOST's sidecar over SSH.
   ./start.sh --check      Install/repair dependencies and verify startup prerequisites.
 EOF
 }
@@ -89,6 +90,25 @@ dependencies_resolve() {
     createRequire(path.join(root, "services/sidecar/package.json")).resolve("node-pty/package.json")
     createRequire(path.join(root, "apps/desktop/package.json")).resolve("electron/package.json")
   ' >/dev/null 2>&1
+}
+
+frontend_dependencies_resolve() {
+  node -e '
+    const { createRequire } = require("node:module")
+    const path = require("node:path")
+    createRequire(path.join(process.cwd(), "apps/desktop/package.json")).resolve("electron/package.json")
+  ' >/dev/null 2>&1
+}
+
+require_frontend_install() {
+  if [[ -d node_modules ]] && frontend_dependencies_resolve; then
+    return
+  fi
+  info "Frontend dependencies are missing or incomplete; installing the desktop and phone UI now..."
+  corepack pnpm install --filter @gogoagent/desktop... --filter @gogoagent/mobile... \
+    || fail "Frontend dependency installation failed. Correct the error above, then rerun ./start.sh --remote."
+  frontend_dependencies_resolve \
+    || fail "Dependency installation completed, but Electron still cannot be resolved."
 }
 
 require_install() {
@@ -235,6 +255,9 @@ mode="full"
 if [[ "${1:-}" == "--frontend" ]]; then
   mode="frontend"
   shift
+elif [[ "${1:-}" == "--remote" ]]; then
+  mode="remote"
+  shift
 elif [[ "${1:-}" == "--check" ]]; then
   mode="check"
   shift
@@ -247,6 +270,16 @@ elif [[ $# -gt 0 ]]; then
 fi
 
 cd "$ROOT_DIR"
+
+if [[ "$mode" == "remote" ]]; then
+  [[ $# -eq 1 ]] || fail "--remote needs one SSH host, such as user@server."
+  require_node
+  require_pnpm
+  require_frontend_install
+  require_electron_binary
+  check_electron_sandbox
+  exec node scripts/remote-frontend.mjs "$1"
+fi
 
 preflight
 
@@ -265,6 +298,6 @@ if ! node -e "fetch(process.argv[1]).then(async (r) => { const health = await r.
   exit 1
 fi
 
-corepack pnpm --filter @gogoagent/desktop build
+corepack pnpm build:ui
 cd "$ROOT_DIR/apps/desktop"
 exec node node_modules/electron/cli.js . "$@"

@@ -4,8 +4,8 @@ import path from 'node:path'
 import type { TranscriptParseResult } from './parseTranscript.js'
 import { safeJsonParse } from './utils.js'
 
-const CACHE_VERSION = 2
-const CACHE_PATH = path.join(os.homedir(), '.gogoagent', 'cache', 'transcripts-v2.json')
+const CACHE_VERSION = 3
+const CACHE_PATH = path.join(os.homedir(), '.gogoagent', 'cache', 'transcripts-v3.json')
 
 interface CacheEntry {
   path: string
@@ -20,20 +20,23 @@ interface CacheFile {
   entries: CacheEntry[]
 }
 
-let loaded = false
+let loadPromise: Promise<void> | null = null
 let dirty = false
 let entries = new Map<string, CacheEntry>()
 
 async function ensureLoaded() {
-  if (loaded) return
-  loaded = true
-  try {
-    const parsed = safeJsonParse<CacheFile>(await readFile(CACHE_PATH, 'utf8'))
-    if (!parsed || parsed.version !== CACHE_VERSION || !Array.isArray(parsed.entries)) return
-    entries = new Map(parsed.entries.map((entry) => [entry.path, entry]))
-  } catch {
-    entries = new Map()
+  if (!loadPromise) {
+    loadPromise = (async () => {
+      try {
+        const parsed = safeJsonParse<CacheFile>(await readFile(CACHE_PATH, 'utf8'))
+        if (!parsed || parsed.version !== CACHE_VERSION || !Array.isArray(parsed.entries)) return
+        entries = new Map(parsed.entries.map((entry) => [entry.path, entry]))
+      } catch {
+        entries = new Map()
+      }
+    })()
   }
+  await loadPromise
 }
 
 export interface TranscriptFileStamp {
