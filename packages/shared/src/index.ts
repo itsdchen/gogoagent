@@ -21,11 +21,12 @@ export interface ProjectRecord {
 export interface SessionRecord {
   id: string
   projectId: string
-  agentKind?: 'claude' | 'codex' | 'shell'
+  agentKind?: 'claude' | 'codex' | 'agy' | 'shell'
   workstreamId?: string
   title: string
   cwd: string
   transcriptPath: string
+  metadataOnly?: boolean
   status: SessionStatus
   startedAt: string
   updatedAt: string
@@ -153,6 +154,52 @@ export interface WorkstreamState {
   updatedAt?: string
 }
 
+export interface WorkstreamDocumentSections {
+  overview: string
+  currentStatus: string
+  findings: string
+  decisions: string
+  openQuestions: string
+  nextSteps: string
+}
+
+export interface WorkstreamDocument {
+  workstreamId: string
+  revision: number
+  updatedAt?: string
+  evidenceThrough?: string
+  sections: WorkstreamDocumentSections
+  sourceSessionIds: string[]
+}
+
+export interface WorkstreamTextFile {
+  path: string
+  content: string
+  kind: 'markdown' | 'text'
+  size: number
+  modifiedAt: string
+}
+
+export interface WorkstreamChatResponse {
+  answer: string
+  replacement?: string
+  section?: keyof WorkstreamDocumentSections
+  sourceSessionIds: string[]
+  evidenceThrough?: string
+  evidenceSessionsUsed?: number
+  evidenceSessionsTotal?: number
+}
+
+export interface LinkedInvestigation {
+  id: string
+  parentWorkstreamId: string
+  title: string
+  question: string
+  createdAt: string
+  startedAt?: string
+  childWorkstreamId?: string
+}
+
 export interface WorkstreamView {
   viewedAt: string
   terminalId?: string
@@ -171,7 +218,7 @@ export interface AttentionItem {
   reason: string
   question?: string
   since: string
-  agentKind?: 'claude' | 'codex' | 'shell'
+  agentKind?: 'claude' | 'codex' | 'agy' | 'shell'
 }
 
 export interface TerminalDecisionReceipt {

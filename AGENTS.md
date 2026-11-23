@@ -11,10 +11,10 @@ work, and leave it accurate when it hands off. Keep it short and never include
 tokens, private transcript contents, personal paths, or customer data.
 
 - Agent: Codex (current session)
-- Task: Ship remote and phone workflows with approval context and receipts.
-- Started: 2026-10-20
-- Status / next step: Complete; restart an older sidecar when live terminals can end to load the new routes.
-- Last verification: Typecheck, full build, decision parser, mobile gateway/browser, sidecar integration, and diff checks passed.
+- Task: Ship workstream context, agent sessions, reader, and navigation updates.
+- Started: 2026-11-23
+- Status / next step: Complete; restart an older sidecar after live terminals finish to load new routes.
+- Last verification: Typecheck, desktop build, six smoke tests, and diff check passed.
 
 ## Product
 

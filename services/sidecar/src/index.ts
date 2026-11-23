@@ -3,7 +3,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { readdir, stat, unlink } from 'node:fs/promises'
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { buildSnapshotModel } from './lib/buildSnapshotModel.js'
@@ -22,6 +22,8 @@ import {
   parseTranscript,
 } from './lib/parseTranscript.js'
 import { parseCodexTranscript } from './lib/parseCodexTranscript.js'
+import { loadAgyConversationSessions } from './lib/agyConversations.js'
+import { readWorkstreamTextFile } from './lib/workstreamFiles.js'
 import { decisionPromptFromLog, decisionQuestion } from './lib/decisionPrompt.js'
 import { getAllAutoTitles } from './lib/autoTitleStore.js'
 import { getAllRefined, getRefinedForSession } from './lib/refineCache.js'
@@ -61,6 +63,8 @@ import {
 import { getAllOverrides, setProjectTitle, setSessionTitle } from './lib/titleStore.js'
 import { migrateLegacyClauderatorState } from './lib/legacyClauderatorMigration.js'
 import { applyWorkstreamStates, setWorkstreamState } from './lib/workstreamState.js'
+import { askWorkstreamDocument, DocumentConflictError, draftWorkstreamDocument, getWorkstreamDocument, saveWorkstreamDocument } from './lib/workstreamDocuments.js'
+import { addInvestigation, getInvestigation, listInvestigations, markInvestigationStarted, removeInvestigation } from './lib/linkedInvestigations.js'
 import { applyWorkstreamViews, getWorkstreamViewRevision, markWorkstreamViewed } from './lib/workstreamViews.js'
 import { getMobileGatewayStatus, startMobileGateway, stopMobileGateway, stopMobileGatewayOnExit } from './lib/mobileGateway.js'
 import type {
@@ -74,16 +78,19 @@ import type {
   TerminalDecisionReceipt,
   WorkLocationRecord,
   WorkstreamState,
+  WorkstreamDocumentSections,
 } from '@gogoagent/shared'
 
 const execFileAsync = promisify(execFile)
 
 const port = Number(process.env.GOGOAGENT_PORT ?? 43111)
+const startingInvestigations = new Set<string>()
 const authToken = randomBytes(32).toString('base64url')
 const authTokenPath = process.env.GOGOAGENT_AUTH_TOKEN_FILE
   ?? path.join(os.homedir(), '.gogoagent', `sidecar-${port}.token`)
 const claudeDir = path.join(os.homedir(), '.claude')
 const codexSessionsDir = path.join(process.env.CODEX_HOME ?? path.join(os.homedir(), '.codex'), 'sessions')
+const agyCacheDir = process.env.GOGOAGENT_AGY_CACHE_DIR ?? path.join(os.homedir(), '.gemini', 'antigravity-cli', 'cache')
 const historyPath = path.join(claudeDir, 'history.jsonl')
 const projectsDir = path.join(claudeDir, 'projects')
 const sessionsDir = path.join(claudeDir, 'sessions')
@@ -280,7 +287,7 @@ function normalizedPathKey(value: string) {
 
 function isAgentTerminalLog(result: TranscriptParseResult) {
   return result.session.id.startsWith('terminal-')
-    && (result.session.agentKind === 'claude' || result.session.agentKind === 'codex')
+    && (result.session.agentKind === 'claude' || result.session.agentKind === 'codex' || result.session.agentKind === 'agy')
 }
 
 function findNativeTranscriptForTerminal(
@@ -298,6 +305,21 @@ function findNativeTranscriptForTerminal(
     }
   }
 
+  // A newly created AGY conversation can be in last_conversations.json before
+  // conversation_metadata.json. Its ID may appear in the terminal's own file
+  // links, which is stronger evidence than a launch-time proximity guess.
+  if (terminalResult.session.agentKind === 'agy') {
+    const terminalCwd = normalizedPathKey(terminalResult.session.cwd)
+    const linkedResult = nativeResults.find((candidate) => (
+      !usedNativeSessionIds.has(candidate.session.id)
+      && candidate.session.agentKind === 'agy'
+      && candidate.session.projectId === terminalResult.session.projectId
+      && normalizedPathKey(candidate.session.cwd) === terminalCwd
+      && terminalResult.messages.some((message) => message.text.includes(candidate.session.id))
+    ))
+    if (linkedResult) return linkedResult
+  }
+
   const terminalStarted = Date.parse(terminalResult.session.startedAt)
   const terminalCwd = normalizedPathKey(terminalResult.session.cwd)
   if (!Number.isFinite(terminalStarted)) return undefined
@@ -307,7 +329,14 @@ function findNativeTranscriptForTerminal(
     .filter((candidate) => candidate.session.projectId === terminalResult.session.projectId)
     .filter((candidate) => normalizedPathKey(candidate.session.cwd) === terminalCwd)
     .map((candidate) => ({ candidate, deltaMs: Date.parse(candidate.session.startedAt) - terminalStarted }))
-    .filter(({ deltaMs }) => Number.isFinite(deltaMs) && deltaMs >= 0 && deltaMs <= 30 * 60 * 1000)
+    .filter(({ deltaMs }) => (
+      Number.isFinite(deltaMs)
+      && deltaMs >= 0
+      && deltaMs <= 30 * 60 * 1000
+      // A launch that already exited cannot own a conversation started minutes later.
+      && (!terminalResult.terminalEndedAt
+        || Date.parse(terminalResult.terminalEndedAt) + 10_000 >= terminalStarted + deltaMs)
+    ))
     .sort((a, b) => a.deltaMs - b.deltaMs)[0]?.candidate
 }
 
@@ -339,8 +368,8 @@ function attachTerminalWorkstreamsToNativeTranscripts(
 
     workstreamIdByNativeSessionId.set(nativeResult.session.id, terminalResult.session.workstreamId)
     const terminalTitle = terminalResult.session.title
-      .replace(/^(?:claude|codex|shell) terminal:\s*/i, '')
-      .replace(/^(?:claude|codex|shell)\s*[·:]\s*/i, '')
+      .replace(/^(?:claude|codex|antigravity|agy|shell) terminal:\s*/i, '')
+      .replace(/^(?:claude|codex|antigravity|agy|shell)\s*[·:]\s*/i, '')
       .trim()
     if (terminalTitle) workstreamTitleByNativeSessionId.set(nativeResult.session.id, terminalTitle)
     usedNativeSessionIds.add(nativeResult.session.id)
@@ -362,9 +391,11 @@ function attachTerminalWorkstreamsToNativeTranscripts(
 }
 
 async function loadIndexedSessions(): Promise<TranscriptParseResult[]> {
-  const [claude, codex, terminalSessions] = await Promise.all([
+  const [claude, codex, agy, terminalSessions] = await Promise.all([
     loadTranscripts(),
     loadCodexTranscripts(),
+    runStep('agyConversations', () => loadAgyConversationSessions(agyCacheDir, parseTranscriptDeps),
+      (value) => ({ count: value.length, detail: 'CLI conversation metadata' })),
     loadTerminalLogs(),
   ])
   try {
@@ -373,7 +404,7 @@ async function loadIndexedSessions(): Promise<TranscriptParseResult[]> {
   } catch (error) {
     recordError('transcriptCache', error instanceof Error ? error.message : String(error))
   }
-  return attachTerminalWorkstreamsToNativeTranscripts([...claude.results, ...codex.results], terminalSessions)
+  return attachTerminalWorkstreamsToNativeTranscripts([...claude.results, ...codex.results, ...agy], terminalSessions)
 }
 
 interface SnapshotGeneration {
@@ -391,6 +422,7 @@ const SNAPSHOT_CACHE_MS = Number(process.env.GOGOAGENT_SNAPSHOT_CACHE_MS ?? 1000
 function terminalKindLabel(kind: TerminalSessionRecord['kind']) {
   if (kind === 'claude') return 'Claude'
   if (kind === 'codex') return 'Codex'
+  if (kind === 'agy') return 'Antigravity'
   return 'Shell'
 }
 
@@ -1050,7 +1082,7 @@ const server = http.createServer(async (req, res) => {
       try {
         const body = await readJsonBody(req)
         const input: CreateTerminalInput = {
-          kind: body?.kind === 'claude' || body?.kind === 'codex' || body?.kind === 'shell' ? body.kind : undefined,
+          kind: body?.kind === 'claude' || body?.kind === 'codex' || body?.kind === 'agy' || body?.kind === 'shell' ? body.kind : undefined,
           cwd: typeof body?.cwd === 'string' ? body.cwd : undefined,
           title: typeof body?.title === 'string' ? body.title : undefined,
           workstreamId: typeof body?.workstreamId === 'string' ? body.workstreamId : undefined,
@@ -1311,6 +1343,224 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
+  const readWorkstreamFileMatch = url.pathname.match(/^\/workstreams\/([^/]+)\/read-file$/)
+  if (readWorkstreamFileMatch && req.method === 'POST') {
+    try {
+      const workstreamId = decodeURIComponent(readWorkstreamFileMatch[1])
+      const body = await readJsonBody(req)
+      const generation = await buildSnapshotGeneration()
+      const project = generation.snapshot.workstreams.find((entry) => entry.id === workstreamId)
+      if (!project) {
+        res.writeHead(404, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Workstream not found' }))
+        return
+      }
+      const terminalId = typeof body?.terminalId === 'string' ? body.terminalId : undefined
+      const terminal = terminalId ? terminalRecords().find((record) => record.id === terminalId && record.workstreamId === workstreamId) : undefined
+      if (terminalId && !terminal) {
+        res.writeHead(404, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Terminal not found in this workstream' }))
+        return
+      }
+      const hasAgy = terminal?.kind === 'agy' || generation.snapshot.sessions.some((session) =>
+        project.sessionIds.includes(session.id) && session.agentKind === 'agy')
+      const file = await readWorkstreamTextFile({
+        selectedPath: typeof body?.path === 'string' ? body.path : '',
+        workstreamRoot: project.repoRoot,
+        terminalCwd: terminal?.cwd,
+        agyBrainRoot: hasAgy ? path.resolve(agyCacheDir, '..', 'brain') : undefined,
+      })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(file))
+    } catch (error) {
+      res.writeHead(400, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Could not read this text file', detail: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
+
+  const documentMatch = url.pathname.match(/^\/workstreams\/([^/]+)\/document(?:\/(draft))?$/)
+  if (documentMatch && (req.method === 'GET' || req.method === 'PATCH' || req.method === 'POST')) {
+    try {
+      const workstreamId = decodeURIComponent(documentMatch[1])
+      const generation = await buildSnapshotGeneration()
+      const project = generation.snapshot.workstreams.find((entry) => entry.id === workstreamId)
+      if (!project) {
+        res.writeHead(404, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Workstream not found' }))
+        return
+      }
+      const current = await getWorkstreamDocument(workstreamId)
+      if (req.method === 'GET' && !documentMatch[2]) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(current))
+        return
+      }
+      if (req.method === 'POST' && documentMatch[2] === 'draft') {
+        const draft = await draftWorkstreamDocument({ project, sessionResults: generation.sessionResults, current })
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(draft))
+        return
+      }
+      if (req.method === 'PATCH' && !documentMatch[2]) {
+        const body = await readJsonBody(req)
+        const sections = body?.sections as Record<string, unknown> | undefined
+        const names = ['overview', 'currentStatus', 'findings', 'decisions', 'openQuestions', 'nextSteps'] as const
+        if (!body || typeof body.revision !== 'number' || !Number.isSafeInteger(body.revision)
+          || !sections || names.some((name) => typeof sections[name] !== 'string')) {
+          res.writeHead(400, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: 'A document revision and all article sections are required.' }))
+          return
+        }
+        const validSessionIds = new Set(project.sessionIds)
+        const sourceSessionIds = Array.isArray(body?.sourceSessionIds)
+          ? body.sourceSessionIds.filter((id): id is string => typeof id === 'string' && validSessionIds.has(id))
+          : []
+        const document = await saveWorkstreamDocument(
+          workstreamId,
+          body.revision as number,
+          sections as unknown as WorkstreamDocumentSections,
+          sourceSessionIds,
+          typeof body.evidenceThrough === 'string' ? body.evidenceThrough : undefined,
+        )
+        recordActivity(`Updated working document for ${project.name}`)
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(document))
+        return
+      }
+      res.writeHead(405, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Method not allowed' }))
+    } catch (error) {
+      const conflict = error instanceof DocumentConflictError
+      res.writeHead(conflict ? 409 : 500, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: conflict ? error.message : 'Could not update working document', detail: conflict ? undefined : error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
+
+  const overviewChatMatch = url.pathname.match(/^\/workstreams\/([^/]+)\/overview\/chat$/)
+  if (overviewChatMatch && req.method === 'POST') {
+    try {
+      const workstreamId = decodeURIComponent(overviewChatMatch[1])
+      const generation = await buildSnapshotGeneration()
+      const project = generation.snapshot.workstreams.find((entry) => entry.id === workstreamId)
+      if (!project) {
+        res.writeHead(404, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Workstream not found' }))
+        return
+      }
+      const body = await readJsonBody(req)
+      const names = ['overview', 'currentStatus', 'findings', 'decisions', 'openQuestions', 'nextSteps'] as const
+      const question = typeof body?.question === 'string' ? body.question.trim() : ''
+      const mode = body?.mode === 'rewrite' ? 'rewrite' : body?.mode === 'answer' ? 'answer' : null
+      const section = names.find((name) => name === body?.section)
+      if (!question || question.length > 2000 || !mode || (mode === 'rewrite' && !section)) {
+        res.writeHead(400, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'A question, mode, and valid article section are required.' }))
+        return
+      }
+      const history = Array.isArray(body?.history)
+        ? body.history.slice(-6).filter((turn): turn is { role: 'user' | 'assistant'; text: string } =>
+          Boolean(turn && typeof turn === 'object' && !Array.isArray(turn)
+            && (turn.role === 'user' || turn.role === 'assistant') && typeof turn.text === 'string'))
+          .map((turn) => ({ role: turn.role, text: turn.text.slice(0, 1000) }))
+        : []
+      const answer = await askWorkstreamDocument({
+        project, sessionResults: generation.sessionResults,
+        current: await getWorkstreamDocument(workstreamId), question, mode, section, history,
+      })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(answer))
+    } catch (error) {
+      res.writeHead(500, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Could not answer workstream question', detail: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
+
+  const investigationMatch = url.pathname.match(/^\/workstreams\/([^/]+)\/investigations(?:\/([^/]+)\/(start|remove))?$/)
+  if (investigationMatch && (req.method === 'GET' || req.method === 'POST')) {
+    try {
+      const workstreamId = decodeURIComponent(investigationMatch[1])
+      const snapshot = await buildSnapshot()
+      const project = snapshot.workstreams.find((entry) => entry.id === workstreamId)
+      if (!project) {
+        res.writeHead(404, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Workstream not found' }))
+        return
+      }
+      if (req.method === 'GET' && !investigationMatch[2]) {
+        const links = await listInvestigations(workstreamId)
+        const parentProject = links.parent && snapshot.workstreams.find((entry) => entry.id === links.parent?.parentWorkstreamId)
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ ...links, parentName: parentProject?.name }))
+        return
+      }
+      const body = await readJsonBody(req)
+      if (req.method === 'POST' && investigationMatch[3] === 'remove') {
+        const removed = await removeInvestigation(workstreamId, decodeURIComponent(investigationMatch[2]))
+        res.writeHead(removed ? 200 : 404, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(removed ? { removed: true } : { error: 'Queued investigation not found' }))
+        return
+      }
+      if (req.method === 'POST' && !investigationMatch[2]) {
+        const title = typeof body?.title === 'string' ? body.title.trim() : ''
+        const question = typeof body?.question === 'string' ? body.question.trim() : ''
+        if (!title || title.length > 120 || !question || question.length > 2000) {
+          res.writeHead(400, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: 'A title and investigation question are required.' }))
+          return
+        }
+        const item = await addInvestigation(workstreamId, title, question)
+        recordActivity(`Queued investigation for ${project.name}`)
+        res.writeHead(201, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ item }))
+        return
+      }
+      if (req.method === 'POST' && investigationMatch[3] === 'start') {
+        const id = decodeURIComponent(investigationMatch[2])
+        const startKey = `${workstreamId}:${id}`
+        if (startingInvestigations.has(startKey)) {
+          res.writeHead(409, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: 'Investigation is already starting.' }))
+          return
+        }
+        startingInvestigations.add(startKey)
+        try {
+        const item = await getInvestigation(workstreamId, id)
+        const kind = body?.kind === 'claude' || body?.kind === 'codex' || body?.kind === 'agy' ? body.kind : null
+        if (!item || item.childWorkstreamId || !kind) {
+          res.writeHead(400, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: 'Choose a queued investigation and an agent.' }))
+          return
+        }
+        const childWorkstreamId = `investigation-${randomUUID()}`
+        const terminal = createTerminal({
+          kind, cwd: project.repoRoot, gitBranch: project.branch, workstreamId: childWorkstreamId,
+          title: `${terminalKindLabel(kind)} · ${item.title}`,
+          indexImmediately: true,
+        })
+        await markInvestigationStarted(workstreamId, id, childWorkstreamId)
+        await putManualWorkstreamLabel(childWorkstreamId, item.title)
+        await setWorkstreamState(childWorkstreamId, { goal: item.question, nextAction: 'Investigate this question and report findings to the parent workstream.' })
+        snapshotCache = null
+        recordActivity(`Started linked investigation ${item.title}`)
+        res.writeHead(201, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ item, terminal }))
+        return
+        } finally {
+          startingInvestigations.delete(startKey)
+        }
+      }
+      res.writeHead(405, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Method not allowed' }))
+    } catch (error) {
+      res.writeHead(500, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Could not update linked investigation', detail: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
+
   const workstreamViewMatch = url.pathname.match(/^\/workstreams\/([^/]+)\/view$/)
   if (workstreamViewMatch && req.method === 'POST') {
     const workstreamId = decodeURIComponent(workstreamViewMatch[1])
@@ -1342,6 +1592,7 @@ const server = http.createServer(async (req, res) => {
     }
     const sessions = detail.sessions.filter((session) => !session.id.startsWith('terminal-') && (
       session.agentKind === 'codex'
+      || session.agentKind === 'agy'
       || (session.agentKind !== 'shell' && session.transcriptPath.toLowerCase().includes('/.claude/projects/'))
     )).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     const repository = await inspectRepository(detail.project.repoRoot)
@@ -1354,7 +1605,7 @@ const server = http.createServer(async (req, res) => {
     const session = sessions.find((candidate) => candidate.id === body?.sessionId)
     if (!session || typeof body?.repositoryFingerprint !== 'string') {
       res.writeHead(400, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Choose a discovered Claude or Codex session to resume.' }))
+      res.end(JSON.stringify({ error: 'Choose a discovered Claude, Codex, or Antigravity CLI session to resume.' }))
       return
     }
     if (body.repositoryFingerprint !== (repository.fingerprint ?? 'unavailable')) {
@@ -1375,7 +1626,7 @@ const server = http.createServer(async (req, res) => {
       return
     }
     try {
-      const kind = session.agentKind === 'codex' ? 'codex' : 'claude'
+      const kind = session.agentKind === 'codex' ? 'codex' : session.agentKind === 'agy' ? 'agy' : 'claude'
       const terminal = createTerminal({
         kind,
         cwd: session.cwd,

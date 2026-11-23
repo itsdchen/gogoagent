@@ -4,7 +4,7 @@ import path from 'node:path'
 import * as pty from 'node-pty'
 import { compactHomePath } from './utils.js'
 
-export type TerminalKind = 'shell' | 'claude' | 'codex'
+export type TerminalKind = 'shell' | 'claude' | 'codex' | 'agy'
 type TerminalStatus = 'running' | 'exited'
 
 export interface TerminalSessionRecord {
@@ -62,6 +62,7 @@ export interface CreateTerminalInput {
   resumeSessionId?: string
   cols?: number
   rows?: number
+  indexImmediately?: boolean
 }
 
 const terminalSessions = new Map<string, TerminalSession>()
@@ -103,6 +104,11 @@ function makeTerminalCommand(kind: TerminalKind, input: CreateTerminalInput) {
     const resumeSessionId = input.resumeSessionId?.trim()
     const commandLine = resumeSessionId ? `claude --resume ${shellArg(resumeSessionId)}` : 'claude'
     return { command: shell, args: ['-lc', commandLine], label: 'claude' }
+  }
+  if (kind === 'agy') {
+    const resumeSessionId = input.resumeSessionId?.trim()
+    const commandLine = resumeSessionId ? `agy --conversation ${shellArg(resumeSessionId)}` : 'agy'
+    return { command: shell, args: ['-lc', commandLine], label: 'agy' }
   }
   const resumeSessionId = input.resumeSessionId?.trim()
   const commandLine = resumeSessionId ? `codex resume ${shellArg(resumeSessionId)}` : 'codex'
@@ -378,10 +384,10 @@ export function createTerminal(input: CreateTerminalInput) {
     cwd,
     workstreamId,
     gitBranch: input.gitBranch,
-    resumeSessionId: kind === 'claude' || kind === 'codex' ? input.resumeSessionId?.trim() || undefined : undefined,
+    resumeSessionId: kind === 'shell' ? undefined : input.resumeSessionId?.trim() || undefined,
     command: [command, ...args].join(' '),
     status: 'running',
-    userInteracted: false,
+    userInteracted: input.indexImmediately === true,
     startedAt: now,
     lastActivityAt: now,
     logBytes: 0,

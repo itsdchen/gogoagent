@@ -68,6 +68,10 @@ corepack pnpm test:mobile         # mobile pairing/proxy smoke test
 corepack pnpm test:mobile-lifecycle # sidecar-owned gateway survives desktop reconnect
 corepack pnpm test:mobile-workspace # phone browser layout, drafts, navigation, and send races
 corepack pnpm test:codex-sessions  # Codex discovery, native resume, and terminal deduplication
+corepack pnpm test:claude-session-link # Claude transcript attaches to its actual terminal workstream
+corepack pnpm test:workstream-document # Reviewed article, read-only chat, linked investigations, and revision conflict
+corepack pnpm test:workstream-files # Scoped text-file reading and safe Markdown display
+corepack pnpm test:agy-sessions    # Antigravity CLI discovery and reviewed resume
 corepack pnpm test:decision-prompt # latest-prompt extraction and stale-choice IDs
 ```
 
@@ -111,7 +115,7 @@ behind an HTTPS reverse proxy. When TLS terminates in front of the gateway, set
 The gateway exposes a narrow mobile API for workstream lists/details, shared
 last-viewed state, reviewed native-session continuation, the attention inbox,
 state edits, terminal-log reads, and reviewed responses to
-running Claude or Codex terminals. It does not proxy raw terminal writes or
+running Claude, Codex, or Antigravity CLI terminals. It does not proxy raw terminal writes or
 terminal create, kill, close, or resize operations.
 
 ## Privacy-safe README screenshots
@@ -156,7 +160,7 @@ curl -s -X PATCH "http://127.0.0.1:${GOGOAGENT_PORT}/workstreams/workstream-<id>
   -H 'content-type: application/json' \
   -d '{"goal":"Ship the fix","currentState":"Implementation complete","blocker":"","nextAction":"Review the diff","lastVerification":"Typecheck passed"}' | python3 -m json.tool
 
-# Send reviewed feedback to a running Claude/Codex terminal (not shell terminals)
+# Send reviewed feedback to a running Claude/Codex/Antigravity CLI terminal (not shell terminals)
 curl -s -X POST "http://127.0.0.1:${GOGOAGENT_PORT}/terminals/<terminalId>/respond" \
   -H "authorization: Bearer ${GOGOAGENT_TOKEN}" \
   -H 'content-type: application/json' \
@@ -243,6 +247,9 @@ Read-only; never modified:
 - `~/.claude/todos/*.json` — todo lists
 - `~/.codex/sessions/**/*.jsonl` (or `$CODEX_HOME/sessions`) — saved Codex
   session rollouts; native resume uses their session IDs
+- `~/.gemini/antigravity-cli/cache/conversation_metadata.json` and
+  `last_conversations.json` (or `$GOGOAGENT_AGY_CACHE_DIR`) — Antigravity CLI
+  conversation metadata and resume map; message transcripts are not indexed
 
 ## Debug tips
 

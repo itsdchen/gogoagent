@@ -33,6 +33,7 @@ export interface TranscriptParseResult {
   messages: SessionMessageRecord[]
   candidates: ExtractionCandidate[]
   terminalResumeSessionId?: string
+  terminalEndedAt?: string
 }
 
 function sumUsage(usage: Record<string, unknown> | undefined) {

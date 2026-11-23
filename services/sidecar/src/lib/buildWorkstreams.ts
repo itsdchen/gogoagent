@@ -80,7 +80,7 @@ function fallbackIntentName(rawTitle: string, fallbackRepoRoot: string, branch: 
   const title = rawTitle
     .replace(/\s+/g, ' ')
     .replace(/^[`"']+|[`"']+$/g, '')
-    .replace(/^(?:claude|codex|shell) terminal:\s*(?:(?:claude|codex|shell)\s*[·:]\s*)?/i, '')
+    .replace(/^(?:claude|codex|antigravity|agy|shell) terminal:\s*(?:(?:claude|codex|antigravity|agy|shell)\s*[·:]\s*)?/i, '')
     .replace(/^(?:please\s+)?(?:hey|hi|hello|ok|okay)[,\s]+/i, '')
     .replace(/^(?:can|could|would)\s+you\s+/i, '')
     .replace(/^(?:take\s+a\s+)?look\s+at\s+(?:the\s+)?(.+)$/i, '$1 Review')

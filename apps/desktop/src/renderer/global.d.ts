@@ -1,6 +1,6 @@
 export {}
 
-type TerminalKind = 'shell' | 'claude' | 'codex'
+type TerminalKind = 'shell' | 'claude' | 'codex' | 'agy'
 
 interface TerminalSessionRecord {
   id: string
@@ -111,6 +111,20 @@ declare global {
           id: string,
           state: Partial<Omit<import('@gogoagent/shared').WorkstreamState, 'workstreamId' | 'updatedAt'>>,
         ) => Promise<{ project: import('@gogoagent/shared').Project }>
+        getDocument: (id: string) => Promise<import('@gogoagent/shared').WorkstreamDocument>
+        readTextFile: (id: string, filePath: string, terminalId?: string) => Promise<import('@gogoagent/shared').WorkstreamTextFile>
+        draftDocument: (id: string) => Promise<import('@gogoagent/shared').WorkstreamDocument>
+        saveDocument: (id: string, document: import('@gogoagent/shared').WorkstreamDocument) => Promise<import('@gogoagent/shared').WorkstreamDocument>
+        askOverview: (id: string, input: {
+          question: string
+          mode: 'answer' | 'rewrite'
+          section?: keyof import('@gogoagent/shared').WorkstreamDocumentSections
+          history: Array<{ role: 'user' | 'assistant'; text: string }>
+        }) => Promise<import('@gogoagent/shared').WorkstreamChatResponse>
+        listInvestigations: (id: string) => Promise<{ items: import('@gogoagent/shared').LinkedInvestigation[]; parent?: import('@gogoagent/shared').LinkedInvestigation; parentName?: string }>
+        addInvestigation: (id: string, input: { title: string; question: string }) => Promise<{ item: import('@gogoagent/shared').LinkedInvestigation }>
+        removeInvestigation: (id: string, itemId: string) => Promise<{ removed: true }>
+        startInvestigation: (id: string, itemId: string, kind: 'claude' | 'codex' | 'agy') => Promise<{ item: import('@gogoagent/shared').LinkedInvestigation; terminal: Awaited<ReturnType<Window['gogoagent']['terminals']['create']>> }>
         label: (input: { projectIds?: string[]; force?: boolean }) => Promise<import('@gogoagent/shared').RefineJobStatus>
         getLabelStatus: (jobId: string) => Promise<import('@gogoagent/shared').RefineJobStatus>
       }

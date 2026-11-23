@@ -53,6 +53,14 @@ export interface CodexRunnerArgs {
 // (typically JSON matching OUTPUT_SCHEMA).
 export type CodexRunner = (args: CodexRunnerArgs) => Promise<string>
 
+const CODEX_WRITING_GUIDANCE = [
+  'Writing guidance for every generated text field:',
+  'Be concise and clear. State concrete facts, findings, or actions directly.',
+  'Use familiar words. Do not invent jargon, labels, or acronyms. Keep necessary technical terms and explain them briefly when unclear.',
+  'Avoid filler and repetition. Preserve important evidence, uncertainty, and citations.',
+  'Follow the requested JSON schema; this guidance applies to the strings inside it.',
+].join('\n')
+
 export const defaultCodexRunner: CodexRunner = async ({ prompt, schemaPath }) => {
   const lastMessageFile = path.join(
     await mkdtemp(path.join(os.tmpdir(), 'gogoagent-codex-')),
@@ -80,7 +88,7 @@ export const defaultCodexRunner: CodexRunner = async ({ prompt, schemaPath }) =>
         if (code === 0) resolve()
         else reject(new Error(`codex exec exited with code ${code}`))
       })
-      child.stdin.end(prompt)
+      child.stdin.end(`${prompt}\n\n${CODEX_WRITING_GUIDANCE}\n`)
     })
     return await readFile(lastMessageFile, 'utf8')
   } finally {

@@ -1,6 +1,6 @@
 # gogoagent
 
-gogoagent helps you run and organize Claude Code and Codex workflows, see
+gogoagent helps you run and organize Claude Code, Codex, and Antigravity CLI workflows, see
 which agents need input, share useful memories between them, and pick up old
 workstreams where you left off.
 
@@ -20,12 +20,48 @@ doesn't disappear into a pile of terminal tabs. From a workstream, you can:
 - Work from a prioritized **Needs you** inbox that explains whether an agent
   is waiting, finished, or blocked.
 - Keep a durable goal, current state, blocker, next action, and last
-  verification handoff on each workstream.
+  verification handoff on each workstream. The desktop brief distinguishes
+  saved notes from recent transcript evidence and flags newer activity.
+- Keep a working document for each workstream with an overview, current status,
+  findings, decisions, open questions, next steps, and source sessions. Edit it
+  directly or draft an update from recorded activity with the local Codex CLI;
+  drafts are reviewed before saving.
+- Open **Overview** with a readable reference article first, followed by a
+  catch-up summary. The article has a table of contents and source links. An
+  empty article stays compact until you draft or edit it. Agent handoff notes
+  are collapsed below the article and show only fields you saved. Use the separate chat to ask
+  about the workstream or review a proposed edit beside the current text.
+  Activity and Terminal have their own tabs.
+- Select a file path in a workstream terminal, then right-click and choose
+  **Open selected file in reader**. Markdown is shown as an article; other
+  UTF-8 text files are shown plainly. The reader is read-only and can keep
+  useful files through **Files to read** beside the Working document heading.
+  **Open file by path** works when a path is hard to select. The list stays on
+  this desktop. The reader can read files in the workstream directory and AGY
+  document files for AGY workstreams.
+- Press Ctrl/Cmd+Shift+P to search workstreams. Press Ctrl/Cmd+Shift+L to
+  switch between Overview, Activity, Terminal, and terminals in the current
+  workstream. Both shortcuts work while a terminal has focus. In either picker,
+  use arrow keys and Enter. Overview and running agents appear first in the
+  current workstream picker; workstreams with agents needing input or running
+  are prioritized among unpinned workstreams. In the workstream picker, Alt+P
+  pins or unpins the selected workstream, and Alt+↑/↓ changes pinned order.
+  Pinned sidebar cards also have arrow buttons. Press F1 for shortcut help.
+  The order is saved on this desktop.
+- Catch up from a short **Since your last visit** list of current attention,
+  saved updates, and recent source-linked activity. Subtle color markers identify
+  each kind of item; Activity holds the longer history.
+- Choose Dark, Light, or System appearance in desktop Settings. The terminal
+  keeps its dark palette for readable agent output.
+- Queue follow-up investigations from Overview. Starting one creates a linked
+  child workstream and pastes its question into an agent terminal for review.
+  Findings in the child article can be proposed back to the parent article.
 - Carry a short, reviewable memory handoff between Claude Code and Codex
   instead of pasting the whole transcript.
-- Resume the latest Claude or Codex conversation, or choose an older Codex
-  session from the timeline, after reviewing the handoff and current Git state.
-- Continue a discovered Claude or Codex session from the paired phone UI after
+- Resume the latest Claude, Codex, or Antigravity CLI conversation from the
+  workstream header, or choose an older session from Activity, after reviewing
+  the handoff and current Git state. The header also opens a running agent.
+- Continue a discovered Claude, Codex, or Antigravity CLI session from the paired phone UI after
   reviewing its workstream state and current repository; see shared new-since-
   last-view markers across phone and desktop.
 
@@ -41,8 +77,8 @@ You need:
 - Node.js 20 or newer
 - Corepack
 
-The `claude` and `codex` CLIs are optional. Install either one if you want
-gogoagent to launch it. Codex is also used for optional naming and lesson
+The `claude`, `codex`, and `agy` CLIs are optional. Install the ones you want
+gogoagent to launch. Codex is also used for optional naming and lesson
 extraction.
 
 Check your setup:
@@ -81,10 +117,19 @@ If `node-pty` has to build from source, macOS may need Xcode Command Line Tools
 (`xcode-select --install`); Linux may need Python and standard C/C++ build
 tools.
 
-Existing Claude Code history under `~/.claude` and Codex history under
-`~/.codex/sessions` appear on first launch. An empty list is normal if there
-is no history yet. To start new work, choose a
-directory, select **Claude**, **Codex**, or **Shell**, and press Start.
+Existing Claude Code history under `~/.claude`, Codex history under
+`~/.codex/sessions`, and resumable Antigravity CLI conversation metadata under
+`~/.gemini/antigravity-cli/cache` appear on first launch. An empty list is normal
+if there is no history yet. To start new work, choose a directory, select
+**Claude**, **Codex**, **AGY**, or **Shell**, and press Start.
+
+Antigravity CLI resumes a selected conversation with `agy --conversation <id>`.
+gogoagent indexes CLI conversation titles and workspaces, but does not yet read
+Antigravity message history into its timeline. Conversations created
+in the Antigravity app must first be imported into the CLI using its `/resume`
+picker before gogoagent can offer direct resume. A conversation saved in the
+CLI's workspace resume map can still be resumed when its title metadata has
+not appeared yet; it is shown with a generic title until that metadata arrives.
 
 Memory sharing between Claude Code and Codex is on by default; either direction
 can be turned off in Settings.
@@ -138,9 +183,9 @@ uses large text and tap targets and lets you:
 - See the agent's current prompt beside the saved workstream goal and next step when it needs a decision.
 - Preview the agent's question in the Needs you inbox, and review a shared receipt after sending a choice.
 - Tap numbered or yes/no choices from that prompt; stale choices are rejected if the prompt changes.
-- Type and explicitly send feedback to a running Claude or Codex terminal.
-- Review and edit the workstream's state capsule, or resume a discovered Claude
-  or Codex session after reviewing the repository.
+- Type and explicitly send feedback to a running Claude, Codex, or Antigravity CLI terminal.
+- Review and edit the workstream's state capsule, or resume a discovered Claude,
+  Codex, or Antigravity CLI session after reviewing the repository.
 
 It intentionally cannot start arbitrary agents or shells or stop terminals.
 
@@ -194,16 +239,20 @@ gateway proxies only a small set of named actions and uses its own pairing
 session; it never sends the sidecar token to the browser. gogoagent does not
 intentionally read Claude credentials or authentication files.
 
-Two optional features can send selected context through your installed Codex
+Four optional features can send selected context through your installed Codex
 CLI:
 
 - **Improve names** sends selected repo and branch names, clipped user or
   terminal messages, and touched paths.
 - **Extract lessons** sends candidate lesson text and nearby conversation
   context.
+- **Update from activity** sends recent workstream messages, saved state, and
+  the current working document to draft a reviewed article update.
+- **Ask this workstream** sends the current article, saved state, recent chat,
+  and selected session excerpts to answer a question or propose an article edit.
 
-The CLI may contact its configured model provider. You do not need either
-feature to browse history or run terminals, and automatic naming is off by
+The CLI may contact its configured model provider. You do not need these
+features to browse history or run terminals, and automatic naming is off by
 default. Memory sharing is different: the handoff is built locally, and
 nothing is sent until you review it in the new terminal.
 
@@ -219,6 +268,13 @@ It reads Claude Code history from:
 
 It also reads Codex session rollouts from `~/.codex/sessions/**/*.jsonl`
 (or `$CODEX_HOME/sessions` when `CODEX_HOME` is set).
+It reads Antigravity CLI conversation metadata from
+`~/.gemini/antigravity-cli/cache/conversation_metadata.json` and its CLI resume
+map. Set `GOGOAGENT_AGY_CACHE_DIR` to use a different cache directory.
+When you explicitly open a file in the desktop reader, the sidecar reads that
+text file from the workstream directory or, for an AGY workstream, its CLI
+document directory. It rejects files outside those areas and files larger than
+2 MB. The reader does not edit the file.
 
 It stores its own data under:
 
@@ -227,6 +283,10 @@ It stores its own data under:
 - `~/.gogoagent/state/` — names, archives, and refined lessons
 - `~/.gogoagent/state/workstream-state.json` — user-reviewed workstream
   goals, status, blockers, next actions, and verification notes
+- `~/.gogoagent/state/workstream-documents.json` — reviewed working documents
+  and their source session links
+- `~/.gogoagent/state/linked-investigations.json` — queued follow-ups and
+  parent-child workstream links
 - `~/.cache/gogoagent/` — older data retained for migration
 
 Terminal logs can contain commands and output from embedded terminals, so

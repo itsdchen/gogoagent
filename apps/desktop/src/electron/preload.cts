@@ -4,9 +4,9 @@ import { get as httpGet } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import QRCode from 'qrcode'
-import type { AttentionItem, DebugState, HealthResponse, MessageSearchResponse, RepositoryState, SessionDetail, SidecarSnapshot, TerminalDecision, TerminalDecisionReceipt, WorkstreamState } from '@gogoagent/shared'
+import type { AttentionItem, DebugState, HealthResponse, LinkedInvestigation, MessageSearchResponse, RepositoryState, SessionDetail, SidecarSnapshot, TerminalDecision, TerminalDecisionReceipt, WorkstreamChatResponse, WorkstreamDocument, WorkstreamDocumentSections, WorkstreamState, WorkstreamTextFile } from '@gogoagent/shared'
 
-type TerminalKind = 'shell' | 'claude' | 'codex'
+type TerminalKind = 'shell' | 'claude' | 'codex' | 'agy'
 
 interface TerminalSessionRecord {
   id: string
@@ -344,6 +344,24 @@ contextBridge.exposeInMainWorld('gogoagent', {
       requestJson<{ project: import('@gogoagent/shared').Project }>(`/workstreams/${encodeURIComponent(id)}/restore`, { method: 'POST' }),
     updateState: (id: string, state: Partial<Omit<WorkstreamState, 'workstreamId' | 'updatedAt'>>) =>
       requestJson<{ project: import('@gogoagent/shared').Project }>(`/workstreams/${encodeURIComponent(id)}/state`, { method: 'PATCH', body: state }),
+    getDocument: (id: string) =>
+      requestJson<WorkstreamDocument>(`/workstreams/${encodeURIComponent(id)}/document`),
+    readTextFile: (id: string, filePath: string, terminalId?: string) =>
+      requestJson<WorkstreamTextFile>(`/workstreams/${encodeURIComponent(id)}/read-file`, { method: 'POST', body: { path: filePath, terminalId } }),
+    draftDocument: (id: string) =>
+      requestJson<WorkstreamDocument>(`/workstreams/${encodeURIComponent(id)}/document/draft`, { method: 'POST' }),
+    saveDocument: (id: string, document: WorkstreamDocument) =>
+      requestJson<WorkstreamDocument>(`/workstreams/${encodeURIComponent(id)}/document`, { method: 'PATCH', body: document }),
+    askOverview: (id: string, input: { question: string; mode: 'answer' | 'rewrite'; section?: keyof WorkstreamDocumentSections; history: Array<{ role: 'user' | 'assistant'; text: string }> }) =>
+      requestJson<WorkstreamChatResponse>(`/workstreams/${encodeURIComponent(id)}/overview/chat`, { method: 'POST', body: input }),
+    listInvestigations: (id: string) =>
+      requestJson<{ items: LinkedInvestigation[]; parent?: LinkedInvestigation; parentName?: string }>(`/workstreams/${encodeURIComponent(id)}/investigations`),
+    addInvestigation: (id: string, input: { title: string; question: string }) =>
+      requestJson<{ item: LinkedInvestigation }>(`/workstreams/${encodeURIComponent(id)}/investigations`, { method: 'POST', body: input }),
+    removeInvestigation: (id: string, itemId: string) =>
+      requestJson<{ removed: true }>(`/workstreams/${encodeURIComponent(id)}/investigations/${encodeURIComponent(itemId)}/remove`, { method: 'POST' }),
+    startInvestigation: (id: string, itemId: string, kind: Exclude<TerminalKind, 'shell'>) =>
+      requestJson<{ item: LinkedInvestigation; terminal: TerminalSessionRecord }>(`/workstreams/${encodeURIComponent(id)}/investigations/${encodeURIComponent(itemId)}/start`, { method: 'POST', body: { kind } }),
     label: (input: { projectIds?: string[]; force?: boolean }) =>
       requestJson<import('@gogoagent/shared').RefineJobStatus>('/workstreams/label', { method: 'POST', body: input }),
     getLabelStatus: (jobId: string) =>

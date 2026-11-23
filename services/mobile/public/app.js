@@ -282,6 +282,7 @@ function formatTime(value) {
 function kindLabel(kind) {
   if (kind === 'claude') return 'Claude'
   if (kind === 'codex') return 'Codex'
+  if (kind === 'agy') return 'Antigravity'
   return 'Shell'
 }
 
@@ -759,11 +760,11 @@ async function openContinuationReview() {
     for (const session of review.sessions) {
       const option = document.createElement('option')
       option.value = session.id
-      option.textContent = `${session.agentKind === 'codex' ? 'Codex' : 'Claude'} · ${session.title} · ${formatTime(session.updatedAt)}`
+      option.textContent = `${kindLabel(session.agentKind)} · ${session.title} · ${formatTime(session.updatedAt)}`
       elements.continuationSession.append(option)
     }
     elements.continuationSubmit.disabled = review.sessions.length === 0
-    setStatus(elements.continuationStatus, review.sessions.length ? '' : 'No native Claude or Codex session is available to resume.')
+    setStatus(elements.continuationStatus, review.sessions.length ? '' : 'No native Claude, Codex, or Antigravity CLI session is available to resume.')
   } catch (error) {
     setStatus(elements.continuationStatus, error.message, true)
   }

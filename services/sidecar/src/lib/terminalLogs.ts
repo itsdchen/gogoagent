@@ -12,7 +12,7 @@ const MESSAGE_CHUNK_CHARS = 4000
 interface TerminalLogMetadata {
   version?: number
   id?: string
-  kind?: 'shell' | 'claude' | 'codex'
+  kind?: 'shell' | 'claude' | 'codex' | 'agy'
   title?: string
   cwd?: string
   workstreamId?: string
@@ -60,7 +60,7 @@ function stripAnsi(text: string) {
 }
 
 function terminalTitle(metadata: TerminalLogMetadata, sessionId: string) {
-  const prefix = metadata.kind === 'claude' ? 'Claude terminal' : metadata.kind === 'codex' ? 'Codex terminal' : 'Shell terminal'
+  const prefix = metadata.kind === 'claude' ? 'Claude terminal' : metadata.kind === 'codex' ? 'Codex terminal' : metadata.kind === 'agy' ? 'Antigravity terminal' : 'Shell terminal'
   return clampTitle(metadata.title ? `${prefix}: ${metadata.title}` : `${prefix}: ${sessionId}`, 88)
 }
 
@@ -250,6 +250,7 @@ export async function loadTerminalLogSessions(
           messages,
           candidates: [],
           terminalResumeSessionId: metadata.resumeSessionId,
+          terminalEndedAt: metadata.endedAt,
         }
         terminalLogCache.set(metadataPath, {
           metadata,

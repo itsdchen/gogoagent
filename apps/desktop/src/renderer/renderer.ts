@@ -3,6 +3,7 @@ import type {
   ArtifactRecord,
   DebugState,
   ExtractionCandidate,
+  LinkedInvestigation,
   Project,
   ProjectDetail,
   RefineJobStatus,
@@ -12,10 +13,15 @@ import type {
   SessionMessageRecord,
   SessionRecord,
   TerminalDecisionReceipt,
+  WorkstreamDocument,
+  WorkstreamChatResponse,
+  WorkstreamDocumentSections,
   WorkLocationRecord,
+  WorkstreamTextFile,
 } from '@gogoagent/shared'
+import { renderMarkdownReader } from './markdownReader.js'
 
-type TerminalKind = 'shell' | 'claude' | 'codex'
+type TerminalKind = 'shell' | 'claude' | 'codex' | 'agy'
 type AgentTerminalKind = Exclude<TerminalKind, 'shell'>
 type TerminalSessionRecord = Awaited<ReturnType<typeof window.gogoagent.terminals.list>>[number]
 type MobileGatewayStatus = Awaited<ReturnType<typeof window.gogoagent.mobile.getStatus>>
@@ -97,6 +103,7 @@ function iconMarkup(name: IconName, className = 'button-icon'): string {
 function terminalKindIcon(kind: TerminalKind): IconName {
   if (kind === 'claude') return 'bot'
   if (kind === 'codex') return 'code-2'
+  if (kind === 'agy') return 'lightbulb'
   return 'terminal'
 }
 
@@ -110,6 +117,8 @@ function hydrateIconPlaceholders(root: ParentNode = document) {
 
 // ---------- DOM refs ----------
 const appNotice = document.querySelector('#app-notice') as HTMLElement
+const appShell = document.querySelector('.app-shell') as HTMLElement
+const sidebarReturnButton = document.querySelector('#sidebar-return-button') as HTMLButtonElement
 const refreshButton = document.querySelector('#refresh-button') as HTMLButtonElement
 const labelWorkstreamsButton = document.querySelector('#label-workstreams-button') as HTMLButtonElement
 const labelWorkstreamsRetryButton = document.querySelector('#label-workstreams-retry-button') as HTMLButtonElement
@@ -131,10 +140,48 @@ const contentRoot = document.querySelector('.content') as HTMLElement
 const detailEmpty = document.querySelector('#project-detail-empty') as HTMLDivElement
 const detailEmptyText = detailEmpty.querySelector('p') as HTMLParagraphElement
 const detailRoot = document.querySelector('#project-detail') as HTMLElement
+const workstreamViewTabs = document.querySelector('#workstream-view-tabs') as HTMLElement
+const workstreamsToggle = document.querySelector('#workstreams-toggle') as HTMLButtonElement
+const workstreamsToggleCount = document.querySelector('#workstreams-toggle-count') as HTMLElement
+const overviewChatToggle = document.querySelector('#overview-chat-toggle') as HTMLButtonElement
+const overviewChatCard = document.querySelector('#overview-chat-card') as HTMLElement
+const overviewChatClose = document.querySelector('#overview-chat-close') as HTMLButtonElement
+const overviewChatBackdrop = document.querySelector('#overview-chat-backdrop') as HTMLButtonElement
 const detailTitle = document.querySelector('#detail-title') as HTMLElement
 const detailSubtitle = document.querySelector('#detail-subtitle') as HTMLElement
 const detailMeta = document.querySelector('#detail-meta') as HTMLElement
 const workstreamStateSummary = document.querySelector('#workstream-state-summary') as HTMLDivElement
+const workstreamHandoff = document.querySelector('#workstream-handoff') as HTMLDetailsElement
+const documentArticle = document.querySelector('#document-article') as HTMLDivElement
+const documentForm = document.querySelector('#document-form') as HTMLFormElement
+const documentStatus = document.querySelector('#document-status') as HTMLParagraphElement
+const documentDraftButton = document.querySelector('#document-draft-button') as HTMLButtonElement
+const documentEditButton = document.querySelector('#document-edit-button') as HTMLButtonElement
+const documentSaveButton = document.querySelector('#document-save-button') as HTMLButtonElement
+const documentCancelButton = document.querySelector('#document-cancel-button') as HTMLButtonElement
+const overviewChatHistory = document.querySelector('#overview-chat-history') as HTMLDivElement
+const overviewChatMode = document.querySelector('#overview-chat-mode') as HTMLSelectElement
+const overviewChatSection = document.querySelector('#overview-chat-section') as HTMLSelectElement
+const overviewChatSectionLabel = document.querySelector('#overview-chat-section-label') as HTMLLabelElement
+const overviewChatQuestion = document.querySelector('#overview-chat-question') as HTMLTextAreaElement
+const overviewChatSend = document.querySelector('#overview-chat-send') as HTMLButtonElement
+const overviewChatStatus = document.querySelector('#overview-chat-status') as HTMLParagraphElement
+const investigationParent = document.querySelector('#investigation-parent') as HTMLDivElement
+const investigationList = document.querySelector('#investigation-list') as HTMLDivElement
+const investigationTitle = document.querySelector('#investigation-new-title') as HTMLInputElement
+const investigationQuestion = document.querySelector('#investigation-new-question') as HTMLTextAreaElement
+const investigationAdd = document.querySelector('#investigation-add') as HTMLButtonElement
+const investigationStatus = document.querySelector('#investigation-status') as HTMLParagraphElement
+const investigationStartDialog = document.querySelector('#investigation-start-dialog') as HTMLDialogElement
+const investigationStartTitle = document.querySelector('#investigation-start-title') as HTMLElement
+const investigationStartSummary = document.querySelector('#investigation-start-summary') as HTMLElement
+const investigationStartQuestion = document.querySelector('#investigation-start-question') as HTMLElement
+const investigationStartAgent = document.querySelector('#investigation-start-agent') as HTMLElement
+const investigationStartDirectory = document.querySelector('#investigation-start-directory') as HTMLElement
+const investigationStartWarning = document.querySelector('#investigation-start-warning') as HTMLElement
+const investigationStartCancel = document.querySelector('#investigation-start-cancel') as HTMLButtonElement
+const investigationStartConfirm = document.querySelector('#investigation-start-confirm') as HTMLButtonElement
+const workstreamStateFreshness = document.querySelector('#workstream-state-freshness') as HTMLParagraphElement
 const workstreamStateForm = document.querySelector('#workstream-state-form') as HTMLFormElement
 const workstreamStateStatus = document.querySelector('#workstream-state-status') as HTMLElement
 const stateEditButton = document.querySelector('#state-edit-button') as HTMLButtonElement
@@ -149,6 +196,23 @@ const terminalCard = document.querySelector('#terminal-card') as HTMLElement
 const terminalTabs = document.querySelector('#terminal-tabs') as HTMLDivElement
 const terminalEmpty = document.querySelector('#terminal-empty') as HTMLDivElement
 const terminalHost = document.querySelector('#terminal-host') as HTMLDivElement
+const terminalContextMenu = document.querySelector('#terminal-context-menu') as HTMLDivElement
+const terminalContextOpen = document.querySelector('#terminal-context-open') as HTMLButtonElement
+const terminalContextCopy = document.querySelector('#terminal-context-copy') as HTMLButtonElement
+const fileReaderDialog = document.querySelector('#file-reader-dialog') as HTMLDialogElement
+const fileReaderTitle = document.querySelector('#file-reader-title') as HTMLHeadingElement
+const fileReaderClose = document.querySelector('#file-reader-close') as HTMLButtonElement
+const fileReaderForm = document.querySelector('#file-reader-form') as HTMLFormElement
+const fileReaderPath = document.querySelector('#file-reader-path') as HTMLInputElement
+const fileReaderStatus = document.querySelector('#file-reader-status') as HTMLParagraphElement
+const fileReaderMeta = document.querySelector('#file-reader-meta') as HTMLSpanElement
+const fileReaderContent = document.querySelector('#file-reader-content') as HTMLDivElement
+const fileReaderKeep = document.querySelector('#file-reader-keep') as HTMLButtonElement
+const readingListCard = document.querySelector('#reading-list-card') as HTMLElement
+const readingListToggle = document.querySelector('#reading-list-toggle') as HTMLButtonElement
+const readingListCount = document.querySelector('#reading-list-count') as HTMLSpanElement
+const readFileByPath = document.querySelector('#read-file-by-path') as HTMLButtonElement
+const readingList = document.querySelector('#reading-list') as HTMLDivElement
 const terminalActions = document.querySelector('#terminal-actions') as HTMLDivElement
 const terminalStatus = document.querySelector('#terminal-status') as HTMLElement
 const desktopDecisionCard = document.querySelector('#desktop-decision-card') as HTMLElement
@@ -165,11 +229,17 @@ const terminalHelp = document.querySelector('#terminal-help') as HTMLElement
 const newShellButton = document.querySelector('#new-shell-button') as HTMLButtonElement
 const newClaudeButton = document.querySelector('#new-claude-button') as HTMLButtonElement
 const newCodexButton = document.querySelector('#new-codex-button') as HTMLButtonElement
+const newAgyButton = document.querySelector('#new-agy-button') as HTMLButtonElement
 const terminalCopyContextButton = document.querySelector('#terminal-copy-context-button') as HTMLButtonElement
 const terminalPasteContextButton = document.querySelector('#terminal-paste-context-button') as HTMLButtonElement
 const terminalCopyLogButton = document.querySelector('#terminal-copy-log-button') as HTMLButtonElement
 const terminalCloseButton = document.querySelector('#terminal-close-button') as HTMLButtonElement
 const workstreamDigest = document.querySelector('#workstream-digest') as HTMLDivElement
+const workstreamChangesTitle = document.querySelector('#workstream-changes-title') as HTMLElement
+const workstreamChangesMeta = document.querySelector('#workstream-changes-meta') as HTMLElement
+const workstreamChangesList = document.querySelector('#workstream-changes-list') as HTMLDivElement
+const workstreamChangesNote = document.querySelector('#workstream-changes-note') as HTMLElement
+const workstreamChangesActivity = document.querySelector('#workstream-changes-activity') as HTMLButtonElement
 const detailTimeline = document.querySelector('#detail-timeline') as HTMLDivElement
 const timelineToggleAllButton = document.querySelector('#timeline-toggle-all-button') as HTMLButtonElement
 const timelineOrderButton = document.querySelector('#timeline-order-button') as HTMLButtonElement
@@ -200,8 +270,19 @@ const phonePairingCode = document.querySelector('#phone-pairing-code') as HTMLEl
 const phoneDeviceCount = document.querySelector('#phone-device-count') as HTMLElement
 const phoneStatus = document.querySelector('#phone-status') as HTMLElement
 
+const switcherDialog = document.querySelector('#switcher-dialog') as HTMLDialogElement
+const switcherTitle = document.querySelector('#switcher-title') as HTMLHeadingElement
+const switcherClose = document.querySelector('#switcher-close') as HTMLButtonElement
+const switcherQuery = document.querySelector('#switcher-query') as HTMLInputElement
+const switcherResults = document.querySelector('#switcher-results') as HTMLDivElement
+const switcherHelp = document.querySelector('#switcher-help') as HTMLParagraphElement
+const keyboardHelpDialog = document.querySelector('#keyboard-help-dialog') as HTMLDialogElement
+const keyboardHelpClose = document.querySelector('#keyboard-help-close') as HTMLButtonElement
+const keyboardHelpOpen = document.querySelector('#keyboard-help-open') as HTMLButtonElement
+
 const settingsToggle = document.querySelector('#settings-toggle') as HTMLButtonElement
 const settingsDialog = document.querySelector('#settings-dialog') as HTMLDialogElement
+const appearanceInputs = [...document.querySelectorAll<HTMLInputElement>('input[name="appearance"]')]
 const sessionOrderOldestInput = document.querySelector('#session-order-oldest') as HTMLInputElement
 const sessionOrderNewestInput = document.querySelector('#session-order-newest') as HTMLInputElement
 const contextClaudeToCodexInput = document.querySelector('#context-claude-to-codex') as HTMLInputElement
@@ -246,6 +327,7 @@ let attentionItems: AttentionItem[] = []
 let attentionRequestVersion = 0
 let selectedProjectId: string | null = null
 let currentDetail: ProjectDetail | null = null
+let currentWorkstreamView: 'overview' | 'activity' | 'terminal' = 'overview'
 let refinePollTimer: number | null = null
 let labelPollTimer: number | null = null
 let labelJobInFlight = false
@@ -253,6 +335,8 @@ let showArchivedWorkstreams = false
 let activeTranscript: TranscriptView | null = null
 const projectDetailCache = new Map<string, CacheEntry<ProjectDetail>>()
 const sessionDetailCache = new Map<string, CacheEntry<SessionDetail>>()
+const contextPreviewLoadedIds = new Set<string>()
+const contextPreviewFailedIds = new Set<string>()
 const sessionDetailRequests = new Map<string, Promise<SessionDetail>>()
 const terminalViews = new Map<string, TerminalView>()
 let activeTerminalId: string | null = null
@@ -280,6 +364,22 @@ let failedLabelProjectIds: string[] = []
 let transcriptVisibleMessageLimit = 0
 let transcriptSearchTimer: number | null = null
 let stateEditing = false
+let currentWorkstreamDocument: WorkstreamDocument | null = null
+let pendingWorkstreamDocument: WorkstreamDocument | null = null
+let documentEditing = false
+let documentBusyWorkstreamId: string | null = null
+let changeVisit: { workstreamId: string; ready: boolean; previousViewedAt?: string } | null = null
+let changeSessionDetails: SessionDetail[] = []
+let changeSessionCount = 0
+let changeSessionLoad: 'loading' | 'loaded' | 'error' = 'loading'
+type OverviewChatTurn = { role: 'user' | 'assistant'; text: string; response?: WorkstreamChatResponse }
+const overviewChatByWorkstream = new Map<string, OverviewChatTurn[]>()
+let overviewChatBusy = false
+let investigations: LinkedInvestigation[] = []
+let investigationParentLink: LinkedInvestigation | undefined
+let investigationParentName = ''
+let investigationBusy = false
+let investigationStartPending: { id: string; kind: AgentTerminalKind } | null = null
 
 const GLOBAL_CWD_STORAGE_KEY = 'gogoagent.globalCwd'
 const GLOBAL_CWD_RECENTS_STORAGE_KEY = 'gogoagent.recentCwds.v1'
@@ -294,6 +394,27 @@ const LAST_VIEWED_TERMINALS_STORAGE_KEY = 'gogoagent.lastViewedTerminals.v1'
 const LAST_CONTINUATION_REPOSITORIES_STORAGE_KEY = 'gogoagent.lastContinuationRepositories.v1'
 const STATUS_NOTES_STORAGE_KEY = 'gogoagent.workstreamStatusNotes.v1'
 const CONTEXT_SHARING_STORAGE_KEY = 'gogoagent.contextSharing.v1'
+const THEME_STORAGE_KEY = 'gogoagent.theme.v1'
+const READING_FILES_STORAGE_KEY = 'gogoagent.readingFiles.v1'
+
+type Appearance = 'dark' | 'light' | 'system'
+const systemLightTheme = window.matchMedia('(prefers-color-scheme: light)')
+function readAppearance(): Appearance {
+  const stored = localStorage.getItem(THEME_STORAGE_KEY)
+  return stored === 'light' || stored === 'system' ? stored : 'dark'
+}
+let appearance: Appearance = readAppearance()
+function applyAppearance() {
+  document.documentElement.dataset.theme = appearance === 'light' || (appearance === 'system' && systemLightTheme.matches) ? 'light' : 'dark'
+}
+function setAppearance(next: Appearance) {
+  appearance = next
+  localStorage.setItem(THEME_STORAGE_KEY, next)
+  applyAppearance()
+  renderSettingsControls()
+}
+applyAppearance()
+systemLightTheme.addEventListener('change', () => { if (appearance === 'system') applyAppearance() })
 
 function migrateSpoolLocalStorage() {
   try {
@@ -345,6 +466,16 @@ const terminalFocusWorkstreamIds = readStringSet(TERMINAL_FOCUS_WORKSTREAMS_STOR
 const lastViewedTerminalIdsByWorkstream = readStringRecord(LAST_VIEWED_TERMINALS_STORAGE_KEY)
 const lastContinuationRepositories = readStringRecord(LAST_CONTINUATION_REPOSITORIES_STORAGE_KEY)
 const statusNotesByWorkstream = readStringRecord(STATUS_NOTES_STORAGE_KEY)
+const readingFilesByWorkstream = readReadingFiles()
+let readerWorkstreamId: string | null = null
+let readerTerminalId: string | null = null
+let readerFile: WorkstreamTextFile | null = null
+let readingListOpen = false
+let readerRequestVersion = 0
+let contextTerminalId: string | null = null
+let contextSelection = ''
+let cachedRightClickSelection = ''
+let cachedRightClickTerminalId: string | null = null
 let contextSharingSettings = readContextSharingSettings()
 let automaticNamingEnabled = localStorage.getItem(AUTO_NAMING_ENABLED_STORAGE_KEY) === 'true'
 const unreadWorkstreamIds = new Set<string>()
@@ -379,14 +510,28 @@ interface TerminalView {
   terminal: InstanceType<typeof window.Terminal>
   fitAddon?: FitAddonInstance
   element: HTMLDivElement
+  logRestoreStarted: boolean
   logRestored: boolean
+  awaitingRedraw?: boolean
   needsInputSuppressed?: boolean
   pendingData: Array<{ data: string; logBytes?: number }>
+  pendingDataChars: number
   pendingWrites: string[]
   writeFrame: number | null
   scrollAfterWrite?: boolean
   scrollGeneration: number
 }
+
+type SwitcherTarget =
+  | { kind: 'view'; title: string; detail: string; view: 'overview' | 'activity' | 'terminal' }
+  | { kind: 'terminal'; title: string; detail: string; id: string }
+  | { kind: 'workstream'; title: string; detail: string; id: string }
+
+let switcherItems: SwitcherTarget[] = []
+let switcherIndex = 0
+let switcherScope: 'workstreams' | 'current' = 'workstreams'
+let switcherReturnFocus: HTMLElement | null = null
+let switcherSelecting = false
 
 interface CacheEntry<T> {
   value: T
@@ -409,6 +554,16 @@ interface WorkstreamDigestItem {
   detail?: string
   tone?: 'attention' | 'muted'
   terminalId?: string
+  sessionId?: string
+}
+
+interface WorkstreamChangeItem {
+  label: string
+  value: string
+  when?: string
+  tone: 'attention' | 'check' | 'knowledge' | 'activity' | 'muted'
+  action: 'terminal' | 'session' | 'article' | 'handoff' | 'activity'
+  id?: string
 }
 
 type ContinuationDecision = 'cancel' | 'without-context' | 'with-context' | 'copy'
@@ -439,6 +594,21 @@ function readStringSet(storageKey: string) {
 
 function saveStringSet(storageKey: string, values: Set<string>) {
   localStorage.setItem(storageKey, JSON.stringify([...values]))
+}
+
+function readReadingFiles(): Record<string, string[]> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(READING_FILES_STORAGE_KEY) ?? '{}') as Record<string, unknown>
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(Object.entries(parsed).map(([id, paths]) => [
+      id,
+      Array.isArray(paths) ? paths.filter((item): item is string => typeof item === 'string').slice(0, 30) : [],
+    ]))
+  } catch { return {} }
+}
+
+function saveReadingFiles() {
+  localStorage.setItem(READING_FILES_STORAGE_KEY, JSON.stringify(readingFilesByWorkstream))
 }
 
 function readStringRecord(storageKey: string) {
@@ -478,7 +648,7 @@ function rememberDirectory(directory: string) {
 
 function selectedGlobalLaunchKind(): TerminalKind {
   const selected = globalLaunchKindInputs.find((input) => input.checked)?.value
-  return selected === 'codex' || selected === 'shell' ? selected : 'claude'
+  return selected === 'codex' || selected === 'agy' || selected === 'shell' ? selected : 'claude'
 }
 
 function setGlobalLaunchKind(kind: TerminalKind) {
@@ -607,6 +777,96 @@ function renderEmpty(target: HTMLElement, text: string) {
 function setAppNotice(message: string) {
   appNotice.textContent = message
   appNotice.classList.toggle('hidden', message.length === 0)
+}
+
+function renderReadingList() {
+  const paths = selectedProjectId ? readingFilesByWorkstream[selectedProjectId] ?? [] : []
+  readingListCount.textContent = `(${paths.length})`
+  readingListToggle.setAttribute('aria-expanded', readingListOpen && Boolean(selectedProjectId) ? 'true' : 'false')
+  readingListCard.classList.toggle('hidden', !readingListOpen || !selectedProjectId)
+  readingList.innerHTML = paths.length ? paths.map((filePath, index) => {
+    const name = filePath.split(/[\\/]/).pop() || filePath
+    return `<div class="reading-list-row">
+      <button class="secondary-button reading-list-open" type="button" data-reading-index="${index}" title="${esc(filePath)}">${esc(name)}</button>
+      <button class="secondary-button reading-list-remove" type="button" data-remove-reading-index="${index}" aria-label="Remove ${esc(name)} from To read">Remove</button>
+    </div>`
+  }).join('') : '<p class="meta">No saved files yet. Open a file by path or from a terminal selection, then keep it here.</p>'
+}
+
+function updateReaderKeepButton() {
+  const file = readerFile
+  const workstreamId = readerWorkstreamId
+  fileReaderKeep.classList.toggle('hidden', !file || !workstreamId)
+  if (!file || !workstreamId) return
+  const saved = (readingFilesByWorkstream[workstreamId] ?? []).includes(file.path)
+  fileReaderKeep.disabled = saved
+  fileReaderKeep.textContent = saved ? 'Saved in Overview' : 'Keep in Overview'
+}
+
+async function readReaderPath() {
+  const version = ++readerRequestVersion
+  const workstreamId = readerWorkstreamId
+  readerFile = null
+  updateReaderKeepButton()
+  fileReaderContent.innerHTML = ''
+  fileReaderMeta.textContent = ''
+  fileReaderStatus.textContent = 'Opening file…'
+  if (!workstreamId) {
+    fileReaderStatus.textContent = 'Attach this terminal to a workstream to read its files here.'
+    return
+  }
+  try {
+    const file = await window.gogoagent.workstreams.readTextFile(workstreamId, fileReaderPath.value, readerTerminalId ?? undefined)
+    if (version !== readerRequestVersion || !fileReaderDialog.open) return
+    readerFile = file
+    fileReaderPath.value = file.path
+    fileReaderTitle.textContent = file.path.split(/[\\/]/).pop() || file.path
+    fileReaderMeta.textContent = `${fmtBytes(file.size)} · modified ${fmtRelative(file.modifiedAt)}`
+    fileReaderContent.innerHTML = file.kind === 'markdown'
+      ? renderMarkdownReader(file.content)
+      : `<pre class="file-reader-plain">${esc(file.content)}</pre>`
+    fileReaderContent.scrollTop = 0
+    fileReaderStatus.textContent = ''
+    updateReaderKeepButton()
+  } catch (error) {
+    if (version !== readerRequestVersion || !fileReaderDialog.open) return
+    fileReaderTitle.textContent = 'Open a file'
+    fileReaderStatus.textContent = (error as Error).message.replace(/^\/workstreams\/[^ ]+\/read-file -> \d+: /, '')
+  }
+}
+
+function openFileReader(filePath: string, workstreamId: string | null, terminalId: string | null = null) {
+  if (!fileReaderDialog.open && document.querySelector('dialog[open]')) return
+  readerWorkstreamId = workstreamId
+  readerTerminalId = terminalId
+  fileReaderTitle.textContent = 'Open a file'
+  fileReaderPath.value = filePath
+  if (!fileReaderDialog.open) fileReaderDialog.showModal()
+  if (filePath.trim()) {
+    void readReaderPath()
+  } else {
+    readerRequestVersion += 1
+    readerFile = null
+    fileReaderStatus.textContent = ''
+    fileReaderMeta.textContent = ''
+    fileReaderContent.innerHTML = ''
+    updateReaderKeepButton()
+    fileReaderPath.focus()
+  }
+}
+
+function selectedFilePath(selection: string) {
+  return selection.trim().split(/\r?\n/, 1)[0]
+    .trim()
+    .replace(/^[`'"<]+|[`'">]+$/g, '')
+    .replace(/:\d+(?::\d+)?$/, '')
+    .replace(/[.,;]+$/, '')
+}
+
+function hideTerminalContextMenu() {
+  terminalContextMenu.classList.add('hidden')
+  contextTerminalId = null
+  contextSelection = ''
 }
 
 async function copyText(text: string) {
@@ -893,13 +1153,21 @@ function loadedSessionDetails(detail: ProjectDetail) {
     .filter((sessionDetail): sessionDetail is SessionDetail => Boolean(sessionDetail))
 }
 
-function digestText(text: string, max = 180) {
-  return clampText(stripAnsi(text).replace(/\s+/g, ' ').trim(), max)
+async function loadWorkstreamContextPreview(detail: ProjectDetail, selectionVersion: number) {
+  const recentSessions = detail.sessions
+    .slice()
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 3)
+  const results = await Promise.allSettled(recentSessions.map((session) => getSessionDetail(session.id)))
+  if (selectionVersion !== projectSelectionVersion || currentDetail?.project.id !== detail.project.id) return
+  contextPreviewLoadedIds.add(detail.project.id)
+  if (results.length && results.every((result) => result.status === 'rejected')) contextPreviewFailedIds.add(detail.project.id)
+  else contextPreviewFailedIds.delete(detail.project.id)
+  renderWorkstreamDigest(currentDetail)
 }
 
-function digestRoleLabel(role: SessionMessageRecord['role']) {
-  if (role === 'assistant') return 'Agent'
-  return role
+function digestText(text: string, max = 180) {
+  return clampText(stripAnsi(text).replace(/\s+/g, ' ').trim(), max)
 }
 
 function isUsefulDigestMessage(message: SessionMessageRecord) {
@@ -964,9 +1232,10 @@ function latestDigestAction(detail: ProjectDetail): WorkstreamDigestItem {
 
   if (latestMessage) {
     return {
-      label: 'Latest',
-      value: `${digestRoleLabel(latestMessage.message.role)}: ${digestText(latestMessage.message.text)}`,
+      label: 'Agent update',
+      value: digestText(latestMessage.message.text),
       detail: `${latestMessage.session.title || latestMessage.session.id} · ${fmtRelative(latestMessage.message.timestamp)}`,
+      sessionId: latestMessage.session.id,
     }
   }
 
@@ -974,52 +1243,38 @@ function latestDigestAction(detail: ProjectDetail): WorkstreamDigestItem {
     .slice()
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
   return {
-    label: 'Latest',
+    label: 'Recent session',
     value: latestSession ? latestSession.title || latestSession.id : 'No session activity yet',
     detail: latestSession ? `updated ${fmtRelative(latestSession.updatedAt)}` : undefined,
     tone: latestSession ? undefined : 'muted',
+    sessionId: latestSession?.id,
   }
 }
 
-function openLoopDigest(detail: ProjectDetail): WorkstreamDigestItem {
-  const latestTodo = loadedSessionDetails(detail)
-    .slice()
-    .sort((a, b) => b.session.updatedAt.localeCompare(a.session.updatedAt))
-    .flatMap((sessionDetail) => (
-      sessionDetail.candidates
-        .filter((candidate) => candidate.kind === 'todo')
-        .map((candidate) => ({ session: sessionDetail.session, candidate }))
-    ))[0]
-
-  if (latestTodo) {
-    return {
-      label: 'Open loop',
-      value: digestText(latestTodo.candidate.text),
-      detail: latestTodo.session.title || latestTodo.session.id,
-    }
-  }
-
-  const loopMessage = loadedSessionDetails(detail)
+function latestRequestDigest(detail: ProjectDetail): WorkstreamDigestItem {
+  const latestRequest = loadedSessionDetails(detail)
     .flatMap((sessionDetail) => sessionDetail.messages.map((message) => ({ session: sessionDetail.session, message })))
     .filter(({ message }) => {
-      if (!isUsefulDigestMessage(message)) return false
-      const text = digestText(message.text, 600)
-      if (/\bno need to (?:check in|respond)\b/i.test(text)) return false
-      return /\b(?:blocked|waiting|still running|remaining|todo|next|follow up|once .* finish|need to|needs to)\b/i.test(text)
+      return message.role === 'user' && !isTimelineNoiseMessage(message) && digestText(message.text).length >= 8
     })
     .sort((a, b) => b.message.timestamp.localeCompare(a.message.timestamp))[0]
 
-  if (loopMessage) {
+  if (latestRequest) {
     return {
-      label: 'Open loop',
-      value: digestText(loopMessage.message.text),
-      detail: `${loopMessage.session.title || loopMessage.session.id} · ${fmtRelative(loopMessage.message.timestamp)}`,
+      label: 'Your request',
+      value: digestText(latestRequest.message.text),
+      detail: `${latestRequest.session.title || latestRequest.session.id} · ${fmtRelative(latestRequest.message.timestamp)}`,
+      sessionId: latestRequest.session.id,
     }
   }
 
   return {
-    label: 'Open loop',
-    value: 'No explicit open loop detected',
+    label: 'Your request',
+    value: contextPreviewFailedIds.has(detail.project.id)
+      ? 'Recent transcript could not be loaded.'
+      : detail.sessions.length && !contextPreviewLoadedIds.has(detail.project.id)
+        ? 'Loading recent transcript…'
+        : 'No request text in the loaded recent sessions.',
     tone: 'muted',
   }
 }
@@ -1037,14 +1292,15 @@ function renderWorkstreamDigest(detail: ProjectDetail) {
         },
     digestTerminalState(),
     latestDigestAction(detail),
-    openLoopDigest(detail),
+    latestRequestDigest(detail),
   ]
 
   workstreamDigest.innerHTML = items
     .map((item) => `
       <div
-        class="workstream-digest-row${item.tone ? ` ${esc(item.tone)}` : ''}${item.terminalId ? ' actionable' : ''}"
+        class="workstream-digest-row${item.tone ? ` ${esc(item.tone)}` : ''}${item.terminalId || item.sessionId ? ' actionable' : ''}"
         ${item.terminalId ? `data-terminal-id="${esc(item.terminalId)}" role="button" tabindex="0" title="Jump to the waiting terminal."` : ''}
+        ${item.sessionId ? `data-session-id="${esc(item.sessionId)}" role="button" tabindex="0" title="Open the source transcript."` : ''}
       >
         <span class="workstream-digest-label">${esc(item.label)}</span>
         <span class="workstream-digest-main">${esc(item.value)}</span>
@@ -1053,6 +1309,523 @@ function renderWorkstreamDigest(detail: ProjectDetail) {
     `)
     .join('')
   renderWorkstreamState(detail)
+  renderWorkstreamChanges(detail)
+}
+
+function renderWorkstreamChanges(detail: ProjectDetail) {
+  const visit = changeVisit?.workstreamId === detail.project.id ? changeVisit : null
+  if (!visit?.ready) {
+    workstreamChangesTitle.textContent = 'Recent activity'
+    workstreamChangesMeta.textContent = 'Checking recorded activity…'
+    workstreamChangesList.innerHTML = '<p class="meta">Reading workstream history…</p>'
+    workstreamChangesNote.textContent = ''
+    return
+  }
+  const baseline = visit.previousViewedAt
+  const baselineMs = baseline ? Date.parse(baseline) : Number.NaN
+  const afterVisit = (value?: string) => Boolean(value && Number.isFinite(baselineMs) && Date.parse(value) > baselineMs)
+  workstreamChangesTitle.textContent = baseline ? 'Since your last visit' : 'Recent activity'
+  workstreamChangesMeta.textContent = baseline
+    ? `Last opened ${fmtRelative(baseline)} · ${changeSessionCount} session${changeSessionCount === 1 ? '' : 's'} with activity`
+    : 'No previous visit recorded · latest workstream activity'
+
+  const items: WorkstreamChangeItem[] = []
+  const waiting = currentWorkstreamTerminals().find(terminalNeedsInput)
+  if (waiting) items.push({ label: 'Needs you now', value: `${terminalLabel(waiting.record.kind)} is waiting for input.`, when: waiting.record.lastActivityAt, tone: 'attention', action: 'terminal', id: waiting.record.id })
+
+  const messages = changeSessionDetails.flatMap((sessionDetail) => sessionDetail.messages
+    .filter((message) => !baseline || afterVisit(message.timestamp))
+    .map((message) => ({ session: sessionDetail.session, message })))
+    .filter(({ message }) => isUsefulDigestMessage(message))
+    .sort((a, b) => b.message.timestamp.localeCompare(a.message.timestamp))
+  const check = messages.find(({ message }) => /\b(?:typecheck|tests?|build|lint|verification)\b/i.test(message.text))
+  if (check) items.push({ label: 'Check mentioned', value: digestText(check.message.text, 170), when: check.message.timestamp, tone: 'check', action: 'session', id: check.session.id })
+
+  if (afterVisit(detail.project.state?.updatedAt)) {
+    const state = detail.project.state
+    const value = state?.blocker?.trim()
+      ? `Current blocker: ${digestText(state.blocker, 150)}`
+      : state?.currentState?.trim()
+        ? digestText(state.currentState, 150)
+        : state?.nextAction?.trim()
+          ? `Next action: ${digestText(state.nextAction, 150)}`
+          : 'Saved workstream notes were updated.'
+    items.push({ label: 'Handoff updated', value, when: state?.updatedAt, tone: 'knowledge', action: 'handoff' })
+  }
+  if (currentWorkstreamDocument?.workstreamId === detail.project.id && afterVisit(currentWorkstreamDocument.updatedAt)) {
+    items.push({ label: 'Article updated', value: 'The working document has newer saved content.', when: currentWorkstreamDocument.updatedAt, tone: 'knowledge', action: 'article' })
+  }
+
+  const latestUpdate = messages.find(({ message }) => message.id !== check?.message.id)
+  if (latestUpdate) items.push({ label: 'Agent update', value: digestText(latestUpdate.message.text, 170), when: latestUpdate.message.timestamp, tone: 'activity', action: 'session', id: latestUpdate.session.id })
+  if (!messages.length && changeSessionCount > 0) {
+    const latestSession = detail.sessions
+      .filter((session) => !baseline || afterVisit(session.updatedAt))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+    if (latestSession) items.push({ label: 'Session activity', value: latestSession.title || latestSession.id, when: latestSession.updatedAt, tone: 'activity', action: 'session', id: latestSession.id })
+  }
+  const ended = currentWorkstreamTerminals().filter((view) => afterVisit(view.record.endedAt)).at(-1)
+  if (ended && items.length < 4) items.push({ label: 'Terminal ended', value: `${terminalLabel(ended.record.kind)} exited.`, when: ended.record.endedAt, tone: 'muted', action: 'terminal', id: ended.record.id })
+
+  workstreamChangesList.innerHTML = items.length
+    ? items.slice(0, 4).map((item) => `<button class="workstream-change-row ${item.tone}" type="button" data-change-action="${item.action}" ${item.id ? `data-change-id="${esc(item.id)}"` : ''}>
+        <span class="workstream-change-copy"><span class="workstream-change-label">${esc(item.label)}</span><span class="workstream-change-text">${esc(item.value)}</span></span>
+        <span class="workstream-change-time">${item.when ? esc(fmtRelative(item.when)) : ''}</span>
+      </button>`).join('')
+    : `<p class="meta">${changeSessionLoad === 'loading' ? 'Reading recent session excerpts…' : baseline ? 'No recorded changes since your last visit.' : 'No recorded activity yet.'}</p>`
+  workstreamChangesNote.textContent = [
+    changeSessionLoad === 'loading' && items.length ? 'Checking recent session excerpts…' : '',
+    changeSessionLoad === 'error' ? 'Some recent session excerpts could not be loaded.' : '',
+    changeSessionLoad !== 'loading' && changeSessionCount > 4 ? `Checked excerpts from up to 4 of ${changeSessionCount} ${baseline ? 'updated' : 'recorded'} sessions. Open Activity for the full history.` : '',
+  ].filter(Boolean).join(' ')
+}
+
+async function loadWorkstreamChanges(detail: ProjectDetail, selectionVersion: number) {
+  const baseline = changeVisit?.workstreamId === detail.project.id ? changeVisit.previousViewedAt : undefined
+  const baselineMs = baseline ? Date.parse(baseline) : Number.NaN
+  const candidates = detail.sessions
+    .filter((session) => !baseline || (Number.isFinite(baselineMs) && Date.parse(session.updatedAt) > baselineMs))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  changeSessionCount = candidates.length
+  changeSessionDetails = []
+  changeSessionLoad = 'loading'
+  renderWorkstreamChanges(detail)
+  const results = await Promise.allSettled(candidates.slice(0, 4).map((session) => getSessionDetail(session.id)))
+  if (selectionVersion !== projectSelectionVersion || currentDetail?.project.id !== detail.project.id) return
+  changeSessionDetails = results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])
+  changeSessionLoad = results.some((result) => result.status === 'rejected') ? 'error' : 'loaded'
+  renderWorkstreamChanges(currentDetail)
+}
+
+const documentSections: Array<{ key: keyof WorkstreamDocumentSections; label: string }> = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'currentStatus', label: 'Current status' },
+  { key: 'findings', label: 'Findings' },
+  { key: 'decisions', label: 'Decisions' },
+  { key: 'openQuestions', label: 'Open questions' },
+  { key: 'nextSteps', label: 'Next steps' },
+]
+
+function renderDocumentText(value: string, sourceSessionIds: string[]) {
+  return esc(value).replace(/\[\[workstream:([\w-]+)\]\]/g, (_match, workstreamId: string) =>
+    `<button class="document-source-link" type="button" data-workstream-id="${workstreamId}">Read linked investigation</button>`)
+    .replace(/\[(\d+)\]/g, (match, number: string) => {
+    const sessionId = sourceSessionIds[Number(number) - 1]
+    return sessionId
+      ? `<button class="document-source-link" type="button" data-session-id="${esc(sessionId)}" title="Open source session ${number}">${match}</button>`
+      : match
+    })
+}
+
+function renderWorkstreamDocument() {
+  const detail = currentDetail
+  const document = currentWorkstreamDocument
+  const busy = documentBusyWorkstreamId === detail?.project.id
+  documentDraftButton.disabled = busy || !document || !detail
+  documentEditButton.disabled = busy || !document || !detail
+  documentSaveButton.disabled = busy
+  documentCancelButton.disabled = busy
+  documentDraftButton.classList.toggle('hidden', documentEditing)
+  documentEditButton.classList.toggle('hidden', documentEditing)
+  documentSaveButton.classList.toggle('hidden', !documentEditing)
+  documentCancelButton.classList.toggle('hidden', !documentEditing)
+  documentArticle.classList.toggle('hidden', documentEditing)
+  documentForm.classList.toggle('hidden', !documentEditing)
+  if (!detail || !document) {
+    documentArticle.innerHTML = '<p class="meta">Loading working document…</p>'
+    return
+  }
+  if (documentEditing) return
+  const hasContent = documentSections.some(({ key }) => document.sections[key])
+  documentDraftButton.textContent = hasContent ? 'Update from activity' : 'Draft from recent activity'
+  if (!hasContent) {
+    documentArticle.classList.add('empty-article')
+    documentArticle.innerHTML = `<div class="workstream-document-start">
+      <p class="eyebrow">Workstream article</p>
+      <h2>${esc(detail.project.name)}</h2>
+      <p>This article has not been written yet. The catch-up summary above shows recent activity; Agent handoff holds any saved notes for the next agent.</p>
+      <p>${detail.sessions.length} recorded session${detail.sessions.length === 1 ? '' : 's'} are available. Draft from recent activity, then review it before saving.</p>
+    </div>`
+    return
+  }
+  documentArticle.classList.remove('empty-article')
+  const sourceSessions = document.sourceSessionIds
+    .map((id) => detail.sessions.find((session) => session.id === id))
+  const stale = Boolean(document.evidenceThrough && detail.project.lastUpdatedAt > document.evidenceThrough)
+  documentArticle.innerHTML = `
+    <nav class="workstream-document-toc" aria-label="Article sections">
+      ${documentSections.map(({ key, label }) => `<a href="#document-section-${key}">${esc(label)}</a>`).join('')}
+      <a href="#document-section-sources">Sources</a>
+    </nav>
+    <div class="workstream-document-content">
+      <header class="workstream-document-masthead">
+        <p class="eyebrow">Workstream article</p>
+        <h2>${esc(detail.project.name)}</h2>
+      </header>
+      <p class="meta">${hasContent
+        ? `Saved ${document.updatedAt ? esc(fmtRelative(document.updatedAt)) : 'recently'}${stale ? ' · New activity since this article was drafted' : ''}`
+        : 'This article is ready to fill. Use Edit, or draft from recorded activity and review it before saving.'}</p>
+      ${documentSections.map(({ key, label }) => `
+        <section id="document-section-${key}" class="workstream-document-section">
+          <h3>${esc(label)}</h3>
+          <p class="${document.sections[key] ? '' : 'empty'}">${document.sections[key] ? renderDocumentText(document.sections[key], document.sourceSessionIds) : 'Not documented yet.'}</p>
+          ${key === 'openQuestions' && document.sections[key] ? '<button type="button" class="document-queue-button" data-queue-open-question>Queue a follow-up</button>' : ''}
+        </section>
+      `).join('')}
+      <section id="document-section-sources" class="workstream-document-section">
+        <h3>Sources</h3>
+        <div class="workstream-document-sources">${sourceSessions.length
+          ? sourceSessions.map((session, index) => session
+            ? `<button type="button" data-session-id="${esc(session.id)}">[${index + 1}] ${esc(session.title || session.id)}</button>`
+            : `<span class="meta">[${index + 1}] Source no longer in this workstream</span>`).join('')
+          : '<span class="meta">No source sessions linked. Manual notes can be added with Edit.</span>'}</div>
+      </section>
+    </div>
+  `
+}
+
+function renderOverviewChat() {
+  const turns = currentDetail ? overviewChatByWorkstream.get(currentDetail.project.id) ?? [] : []
+  overviewChatHistory.innerHTML = turns.length
+    ? turns.map((turn, index) => `<div class="overview-chat-turn ${turn.role}">
+        <p class="overview-chat-role">${turn.role === 'user' ? 'You' : 'Knowledge desk'}</p>
+        <p>${turn.role === 'assistant' && turn.response
+          ? renderDocumentText(turn.text, turn.response.sourceSessionIds) : esc(turn.text)}</p>
+        ${turn.response?.evidenceSessionsTotal !== undefined
+          ? `<p class="overview-chat-evidence">Used excerpts from ${turn.response.evidenceSessionsUsed ?? 0} of ${turn.response.evidenceSessionsTotal} recorded sessions.</p>` : ''}
+        ${turn.response?.replacement && turn.response.section
+          ? `<button type="button" class="secondary-button" data-review-turn="${index}">Review article edit</button>` : ''}
+        ${turn.role === 'assistant' && !turn.response?.replacement ? `<button type="button" class="secondary-button" data-queue-turn="${index}">Queue this question</button>` : ''}
+      </div>`).join('')
+    : '<p class="meta">Ask what is known, where a finding came from, or what still needs investigation.</p>'
+  overviewChatSend.disabled = overviewChatBusy || !currentDetail
+  overviewChatSend.textContent = overviewChatBusy ? 'Thinking…' : overviewChatMode.value === 'rewrite' ? 'Propose edit' : 'Ask'
+  const rewrite = overviewChatMode.value === 'rewrite'
+  overviewChatSection.classList.toggle('hidden', !rewrite)
+  overviewChatSectionLabel.classList.toggle('hidden', !rewrite)
+  overviewChatHistory.scrollTop = overviewChatHistory.scrollHeight
+}
+
+function setKnowledgeOpen(open: boolean) {
+  detailRoot.classList.toggle('knowledge-open', open)
+  overviewChatToggle.setAttribute('aria-expanded', open ? 'true' : 'false')
+  if (open) {
+    overviewChatCard.setAttribute('role', 'dialog')
+    overviewChatCard.setAttribute('aria-modal', 'true')
+  } else {
+    overviewChatCard.removeAttribute('role')
+    overviewChatCard.removeAttribute('aria-modal')
+  }
+  if (open) overviewChatQuestion.focus()
+  else if (document.activeElement === overviewChatClose || document.activeElement === overviewChatBackdrop) overviewChatToggle.focus()
+}
+
+function setWorkstreamListOpen(open: boolean) {
+  appShell.classList.toggle('sidebar-open', open)
+  workstreamsToggle.setAttribute('aria-expanded', open ? 'true' : 'false')
+  if (open) projectsSearch.focus()
+  else workstreamsToggle.focus()
+}
+
+async function sendOverviewChat() {
+  if (!currentDetail || overviewChatBusy) return
+  const question = overviewChatQuestion.value.trim()
+  if (!question) { overviewChatQuestion.focus(); return }
+  const workstreamId = currentDetail.project.id
+  const mode = overviewChatMode.value === 'rewrite' ? 'rewrite' : 'answer'
+  const section = mode === 'rewrite' ? overviewChatSection.value as keyof WorkstreamDocumentSections : undefined
+  const turns = overviewChatByWorkstream.get(workstreamId) ?? []
+  const history = turns.slice(-6).map(({ role, text }) => ({ role, text }))
+  overviewChatBusy = true
+  overviewChatStatus.textContent = mode === 'rewrite' ? 'Preparing a proposed edit…' : 'Reading workstream evidence…'
+  renderOverviewChat()
+  try {
+    const response = await window.gogoagent.workstreams.askOverview(workstreamId, { question, mode, section, history })
+    turns.push({ role: 'user', text: question }, { role: 'assistant', text: response.answer, response })
+    overviewChatByWorkstream.set(workstreamId, turns)
+    if (currentDetail?.project.id === workstreamId) {
+      overviewChatQuestion.value = ''
+      overviewChatStatus.textContent = response.replacement ? 'Edit ready for review.' : ''
+    }
+  } catch (error) {
+    if (currentDetail?.project.id === workstreamId) overviewChatStatus.textContent = `Could not answer: ${(error as Error).message}`
+  } finally {
+    overviewChatBusy = false
+    renderOverviewChat()
+  }
+}
+
+function reviewOverviewEdit(index: number) {
+  if (!currentDetail || !currentWorkstreamDocument) return
+  const response = overviewChatByWorkstream.get(currentDetail.project.id)?.[index]?.response
+  if (!response?.section || !response.replacement) return
+  showDocumentEditor({
+    ...currentWorkstreamDocument,
+    sections: { ...currentWorkstreamDocument.sections, [response.section]: response.replacement },
+    sourceSessionIds: response.sourceSessionIds,
+    evidenceThrough: response.evidenceThrough,
+  }, { section: response.section, original: currentWorkstreamDocument.sections[response.section] })
+  setKnowledgeOpen(false)
+  documentStatus.textContent = 'Review the proposed change before saving.'
+  documentForm.querySelector<HTMLTextAreaElement>(`#document-section-input-${response.section}`)?.focus()
+  documentForm.scrollIntoView({ block: 'start', behavior: 'smooth' })
+}
+
+function renderInvestigations() {
+  investigationParent.classList.toggle('hidden', !investigationParentLink)
+  investigationParent.innerHTML = investigationParentLink
+    ? `Part of <button type="button" data-parent-id="${esc(investigationParentLink.parentWorkstreamId)}">${esc(investigationParentName || 'parent workstream')}</button>. Original question: ${esc(investigationParentLink.question)}
+       <div class="button-row"><button type="button" class="secondary-button" data-propose-parent>Propose parent article update</button></div>` : ''
+  investigationList.innerHTML = investigations.length
+    ? investigations.map((item) => `<div class="investigation-row" data-investigation-id="${esc(item.id)}">
+        <div><h4>${esc(item.title)}</h4><p>${esc(item.question)}</p></div>
+        <div class="button-row">${item.childWorkstreamId
+          ? `<button type="button" class="secondary-button" data-open-child="${esc(item.childWorkstreamId)}">Open workstream</button>`
+          : `<select aria-label="Agent for ${esc(item.title)}"><option value="claude">Claude</option><option value="codex">Codex</option><option value="agy">AGY</option></select><button type="button" class="secondary-button" data-start-id="${esc(item.id)}" ${investigationBusy ? 'disabled' : ''}>Start</button><button type="button" class="secondary-button" data-remove-id="${esc(item.id)}" ${investigationBusy ? 'disabled' : ''}>Remove</button>`}
+        </div>
+      </div>`).join('')
+    : '<p class="meta">No follow-up investigations queued.</p>'
+  investigationAdd.disabled = investigationBusy || !currentDetail
+}
+
+function prefillInvestigation(question: string) {
+  const cleaned = question.replace(/\[\d+\]/g, '').trim().slice(0, 2000)
+  if (!cleaned) return
+  investigationTitle.value = cleaned.split(/[\n.?!]/)[0].trim().slice(0, 80) || 'Follow-up investigation'
+  investigationQuestion.value = cleaned
+  setKnowledgeOpen(false)
+  document.querySelector('.investigation-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  investigationTitle.focus()
+}
+
+async function loadInvestigations(workstreamId: string, selectionVersion: number) {
+  try {
+    const links = await window.gogoagent.workstreams.listInvestigations(workstreamId)
+    if (selectionVersion !== projectSelectionVersion || currentDetail?.project.id !== workstreamId) return
+    investigations = links.items
+    investigationParentLink = links.parent
+    investigationParentName = links.parentName ?? ''
+    renderInvestigations()
+  } catch (error) {
+    if (selectionVersion === projectSelectionVersion && currentDetail?.project.id === workstreamId) {
+      investigationStatus.textContent = `Could not load investigations: ${(error as Error).message}`
+    }
+  }
+}
+
+async function addInvestigation() {
+  if (!currentDetail || investigationBusy) return
+  const title = investigationTitle.value.trim()
+  const question = investigationQuestion.value.trim()
+  if (!title || !question) { investigationStatus.textContent = 'Add a title and a question.'; return }
+  const workstreamId = currentDetail.project.id
+  investigationBusy = true
+  investigationStatus.textContent = 'Adding investigation…'
+  renderInvestigations()
+  try {
+    const { item } = await window.gogoagent.workstreams.addInvestigation(workstreamId, { title, question })
+    if (currentDetail?.project.id === workstreamId) {
+      investigations.push(item)
+      investigationTitle.value = ''
+      investigationQuestion.value = ''
+      investigationStatus.textContent = 'Added to this workstream.'
+    }
+  } catch (error) {
+    if (currentDetail?.project.id === workstreamId) investigationStatus.textContent = `Could not add investigation: ${(error as Error).message}`
+  } finally { investigationBusy = false; if (currentDetail?.project.id === workstreamId) renderInvestigations() }
+}
+
+async function startInvestigation(id: string, kind: AgentTerminalKind) {
+  if (!currentDetail || investigationBusy) return
+  const workstreamId = currentDetail.project.id
+  investigationBusy = true
+  investigationStatus.textContent = 'Starting linked workstream…'
+  renderInvestigations()
+  try {
+    const { item, terminal } = await window.gogoagent.workstreams.startInvestigation(workstreamId, id, kind)
+    if (currentDetail?.project.id === workstreamId) investigations = investigations.map((entry) => entry.id === id ? item : entry)
+    const view = ensureTerminalView(terminal)
+    await loadAllProjects()
+    if (selectedProjectId === workstreamId && !appShell.classList.contains('sidebar-open')
+      && item.childWorkstreamId && projects.some((project) => project.id === item.childWorkstreamId)) {
+      await selectProject(item.childWorkstreamId)
+      selectTerminal(terminal.id)
+    } else if (selectedProjectId === workstreamId && !appShell.classList.contains('sidebar-open')) {
+      showDraftWorkstream(view)
+      selectTerminal(terminal.id)
+    }
+    if (activeTerminalId === terminal.id) terminalStatus.textContent = 'Starting agent. The question will be pasted for review.'
+    window.setTimeout(() => {
+      void window.gogoagent.terminals.write(terminal.id, terminalPastePayload(item.question))
+        .then(async () => {
+          const stillViewingTerminal = activeTerminalId === terminal.id
+          await loadAllProjects()
+          if (stillViewingTerminal && activeTerminalId === terminal.id && !selectedProjectId
+            && item.childWorkstreamId && projects.some((project) => project.id === item.childWorkstreamId)) {
+            await selectProject(item.childWorkstreamId)
+            selectTerminal(terminal.id)
+          }
+          if (activeTerminalId === terminal.id) terminalStatus.textContent = 'Investigation question pasted. Review and send when ready.'
+        })
+        .catch((error) => { if (activeTerminalId === terminal.id) terminalStatus.textContent = `Question paste failed: ${(error as Error).message}` })
+    }, 900)
+  } catch (error) {
+    if (currentDetail?.project.id === workstreamId) investigationStatus.textContent = `Could not start investigation: ${(error as Error).message}`
+  } finally { investigationBusy = false; if (currentDetail?.project.id === workstreamId) renderInvestigations() }
+}
+
+function reviewInvestigationStart(id: string, kind: AgentTerminalKind) {
+  const item = investigations.find((entry) => entry.id === id && !entry.childWorkstreamId)
+  if (!item || !currentDetail) return
+  investigationStartPending = { id, kind }
+  investigationStartTitle.textContent = item.title
+  investigationStartSummary.textContent = 'This creates a linked workstream in the same working directory as the parent.'
+  investigationStartQuestion.textContent = item.question
+  investigationStartAgent.textContent = terminalLabel(kind)
+  investigationStartDirectory.textContent = currentDetail.project.repoRoot
+  investigationStartWarning.textContent = currentWorkstreamTerminals().some((view) => view.record.status === 'running')
+    ? 'An agent is already running in this workstream. Both agents will share the same working directory.' : ''
+  investigationStartDialog.showModal()
+  investigationStartConfirm.focus()
+}
+
+async function removeInvestigation(id: string) {
+  if (!currentDetail || investigationBusy) return
+  const workstreamId = currentDetail.project.id
+  investigationBusy = true
+  renderInvestigations()
+  try {
+    await window.gogoagent.workstreams.removeInvestigation(workstreamId, id)
+    if (currentDetail?.project.id === workstreamId) {
+      investigations = investigations.filter((item) => item.id !== id)
+      investigationStatus.textContent = 'Removed from queue.'
+    }
+  } catch (error) {
+    if (currentDetail?.project.id === workstreamId) investigationStatus.textContent = `Could not remove investigation: ${(error as Error).message}`
+  } finally { investigationBusy = false; if (currentDetail?.project.id === workstreamId) renderInvestigations() }
+}
+
+async function proposeParentArticleUpdate() {
+  if (!currentDetail || !investigationParentLink) return
+  const childId = currentDetail.project.id
+  const parentId = investigationParentLink.parentWorkstreamId
+  const title = investigationParentLink.title
+  investigationStatus.textContent = 'Preparing parent article proposal…'
+  try {
+    const [childDocument, parentDocument] = await Promise.all([
+      window.gogoagent.workstreams.getDocument(childId),
+      window.gogoagent.workstreams.getDocument(parentId),
+    ])
+    const finding = childDocument.sections.findings.trim() || childDocument.sections.currentStatus.trim()
+    if (!finding) {
+      investigationStatus.textContent = 'Document the child investigation findings first, then propose an update.'
+      return
+    }
+    const sourceText = finding.replace(/\[\d+\]/g, '').trim()
+    const addition = `From linked investigation “${title}” [[workstream:${childId}]]:\n${sourceText}`
+    await selectProject(parentId)
+    currentWorkstreamDocument = parentDocument
+    const previous = parentDocument.sections.findings.trim()
+    showDocumentEditor({
+      ...parentDocument,
+      sections: { ...parentDocument.sections, findings: previous ? `${previous}\n\n${addition}` : addition },
+    }, { section: 'findings', original: parentDocument.sections.findings })
+    documentStatus.textContent = 'Review the linked investigation finding before saving it to the parent article.'
+    setWorkstreamView('overview')
+    documentForm.querySelector<HTMLTextAreaElement>('#document-section-input-findings')?.focus()
+  } catch (error) {
+    if (currentDetail?.project.id === childId) investigationStatus.textContent = `Could not prepare update: ${(error as Error).message}`
+  }
+}
+
+function showDocumentEditor(document: WorkstreamDocument, review?: { section: keyof WorkstreamDocumentSections; original: string }) {
+  pendingWorkstreamDocument = document
+  documentEditing = true
+  const fields = review ? documentSections.filter(({ key }) => key === review.section) : documentSections
+  documentForm.innerHTML = review
+    ? `<div class="document-review-grid">
+        <div class="document-review-before"><p class="label">Current ${esc(fields[0].label)}</p><p>${review.original ? esc(review.original) : 'This section is empty.'}</p></div>
+        <div class="document-review-after"><p class="label">Proposed ${esc(fields[0].label)}</p><label>Review and edit<textarea id="document-section-input-${review.section}" maxlength="12000"></textarea></label></div>
+      </div><p class="meta">Only this section changes when you save.</p>`
+    : fields.map(({ key, label }) => `
+      <label>${esc(label)}<textarea id="document-section-input-${key}" maxlength="12000"></textarea></label>
+    `).join('')
+  for (const { key } of fields) {
+    const field = documentForm.querySelector<HTMLTextAreaElement>(`#document-section-input-${key}`)
+    if (field) field.value = document.sections[key]
+  }
+  renderWorkstreamDocument()
+  documentForm.querySelector<HTMLTextAreaElement>('textarea')?.focus()
+}
+
+async function loadWorkstreamDocument(workstreamId: string, selectionVersion: number) {
+  try {
+    const document = await window.gogoagent.workstreams.getDocument(workstreamId)
+    if (selectionVersion !== projectSelectionVersion || currentDetail?.project.id !== workstreamId) return
+    currentWorkstreamDocument = document
+    documentStatus.textContent = ''
+    renderWorkstreamDocument()
+    if (currentDetail) renderWorkstreamChanges(currentDetail)
+  } catch (error) {
+    if (selectionVersion !== projectSelectionVersion || currentDetail?.project.id !== workstreamId) return
+    documentStatus.textContent = `Could not load working document: ${(error as Error).message}`
+    documentArticle.innerHTML = ''
+  }
+}
+
+async function draftWorkstreamDocument() {
+  if (!currentDetail || !currentWorkstreamDocument || documentBusyWorkstreamId === currentDetail.project.id) return
+  const workstreamId = currentDetail.project.id
+  const selectionVersion = projectSelectionVersion
+  documentBusyWorkstreamId = workstreamId
+  documentStatus.textContent = 'Drafting article from recent workstream activity…'
+  renderWorkstreamDocument()
+  try {
+    const draft = await window.gogoagent.workstreams.draftDocument(workstreamId)
+    if (selectionVersion !== projectSelectionVersion || currentDetail?.project.id !== workstreamId) return
+    documentStatus.textContent = 'Draft ready. Review every section before saving.'
+    showDocumentEditor(draft)
+  } catch (error) {
+    if (selectionVersion === projectSelectionVersion && currentDetail?.project.id === workstreamId) {
+      documentStatus.textContent = `Draft failed: ${(error as Error).message}`
+    }
+  } finally {
+    if (documentBusyWorkstreamId === workstreamId) documentBusyWorkstreamId = null
+    if (selectionVersion === projectSelectionVersion && currentDetail?.project.id === workstreamId) renderWorkstreamDocument()
+  }
+}
+
+async function saveWorkstreamDocument() {
+  if (!currentDetail || !currentWorkstreamDocument || !pendingWorkstreamDocument || documentBusyWorkstreamId === currentDetail.project.id) return
+  const pending = pendingWorkstreamDocument
+  const workstreamId = currentDetail.project.id
+  const selectionVersion = projectSelectionVersion
+  const sections = Object.fromEntries(documentSections.map(({ key }) => [
+    key, documentForm.querySelector<HTMLTextAreaElement>(`#document-section-input-${key}`)?.value ?? pending.sections[key],
+  ])) as unknown as WorkstreamDocumentSections
+  documentBusyWorkstreamId = workstreamId
+  documentStatus.textContent = 'Saving working document…'
+  renderWorkstreamDocument()
+  try {
+    const saved = await window.gogoagent.workstreams.saveDocument(workstreamId, {
+      ...pending,
+      revision: currentWorkstreamDocument.revision,
+      sections,
+    })
+    if (selectionVersion !== projectSelectionVersion || currentDetail?.project.id !== workstreamId) return
+    currentWorkstreamDocument = saved
+    pendingWorkstreamDocument = null
+    documentEditing = false
+    documentStatus.textContent = 'Working document saved.'
+    if (currentDetail) renderWorkstreamChanges(currentDetail)
+  } catch (error) {
+    if (selectionVersion === projectSelectionVersion && currentDetail?.project.id === workstreamId) {
+      documentStatus.textContent = `Save failed: ${(error as Error).message}`
+    }
+  } finally {
+    if (documentBusyWorkstreamId === workstreamId) documentBusyWorkstreamId = null
+    if (selectionVersion === projectSelectionVersion && currentDetail?.project.id === workstreamId) renderWorkstreamDocument()
+  }
 }
 
 type WorkstreamStateField = 'goal' | 'currentState' | 'blocker' | 'nextAction' | 'lastVerification'
@@ -1069,9 +1842,7 @@ function latestVerification(detail: ProjectDetail) {
 
 function derivedWorkstreamState(detail: ProjectDetail): Record<WorkstreamStateField, string> {
   const latest = latestDigestAction(detail)
-  const openLoop = openLoopDigest(detail)
   const waiting = currentWorkstreamTerminals().find(terminalNeedsInput)
-  const running = currentWorkstreamTerminals().filter((view) => view.record.status === 'running')
   return {
     goal: detail.project.name,
     currentState: workstreamStatusNote(detail.project.id) || latest.value,
@@ -1080,11 +1851,7 @@ function derivedWorkstreamState(detail: ProjectDetail): Record<WorkstreamStateFi
       : '',
     nextAction: waiting
       ? `Review and answer the waiting ${terminalLabel(waiting.record.kind)} prompt.`
-      : openLoop.tone !== 'muted' && openLoop.value !== latest.value
-      ? openLoop.value
-      : running.length
-        ? `Check the active ${terminalLabel(running[0].record.kind)} terminal.`
-        : 'Continue from the latest recorded session.',
+      : '',
     lastVerification: latestVerification(detail),
   }
 }
@@ -1108,34 +1875,33 @@ function effectiveWorkstreamState(detail: ProjectDetail) {
   }
 }
 
-function activeWorkstreamSummary() {
-  const terminals = currentWorkstreamTerminals()
-  const waiting = terminals.filter(terminalNeedsInput)
-  const running = terminals.filter((view) => view.record.status === 'running')
-  if (waiting.length) return `${terminalLabel(waiting[0].record.kind)} · waiting for you`
-  if (running.length) return running.map((view) => terminalLabel(view.record.kind)).join(', ') + ' · running'
-  return terminals.length ? 'No agent running · terminal history available' : 'No agent terminal attached'
-}
-
 function renderWorkstreamState(detail: ProjectDetail) {
   if (stateEditing) return
-  const state = effectiveWorkstreamState(detail)
+  const saved = detail.project.state
   const rows = [
-    ['Goal', state.goal],
-    ['Current', state.currentState],
-    ['Blocker', state.blocker.value ? state.blocker : { value: 'No blocker recorded.', derived: true }],
-    ['Next', state.nextAction],
-    ['Last verified', state.lastVerification.value ? state.lastVerification : { value: 'No verification recorded.', derived: true }],
-  ] as const
-  workstreamStateSummary.innerHTML = [
-    ...rows.map(([label, entry]) => `
+    ['Goal', saved?.goal],
+    ['Current status', saved?.currentState],
+    ['Blocker or question', saved?.blocker],
+    ['Next action', saved?.nextAction],
+    ['Last verification', saved?.lastVerification],
+  ].filter((row): row is [string, string] => Boolean(row[1]?.trim()))
+  const hasSavedHandoff = rows.length > 0
+  const newActivityAfterSave = saved?.updatedAt
+    ? Date.parse(detail.project.lastUpdatedAt) > Date.parse(saved.updatedAt) + 60_000
+    : false
+  workstreamStateFreshness.textContent = hasSavedHandoff
+    ? `Saved ${saved?.updatedAt ? fmtRelative(saved.updatedAt) : 'previously'}${newActivityAfterSave ? ' · New activity since these notes were saved' : ''}`
+    : ''
+  workstreamStateFreshness.classList.toggle('hidden', !hasSavedHandoff)
+  workstreamStateFreshness.classList.toggle('stale', newActivityAfterSave)
+  workstreamStateSummary.innerHTML = rows.length
+    ? rows.map(([label, value]) => `
       <div class="workstream-state-row">
         <span class="workstream-state-label">${esc(label)}</span>
-        <span class="workstream-state-value${entry.derived ? ' derived' : ''}" title="${entry.derived ? 'Derived from current workstream activity until you save it.' : 'Saved workstream state.'}">${esc(entry.value)}</span>
+        <span class="workstream-state-value">${esc(value)}</span>
       </div>
-    `),
-    `<div class="workstream-state-row"><span class="workstream-state-label">Active</span><span class="workstream-state-value">${esc(activeWorkstreamSummary())}</span></div>`,
-  ].join('')
+    `).join('')
+    : '<p class="meta">No saved handoff yet. Add notes if the next agent needs context beyond the working document.</p>'
 }
 
 function setStateEditing(editing: boolean) {
@@ -1149,12 +1915,12 @@ function setStateEditing(editing: boolean) {
 
 function editWorkstreamState() {
   if (!currentDetail) return
-  const state = effectiveWorkstreamState(currentDetail)
-  stateGoalInput.value = state.goal.value
-  stateCurrentInput.value = state.currentState.value
+  workstreamHandoff.open = true
+  stateGoalInput.value = currentDetail.project.state?.goal ?? ''
+  stateCurrentInput.value = currentDetail.project.state?.currentState ?? ''
   stateBlockerInput.value = currentDetail.project.state?.blocker ?? ''
-  stateNextInput.value = state.nextAction.value
-  stateVerificationInput.value = currentDetail.project.state?.lastVerification ?? state.lastVerification.value
+  stateNextInput.value = currentDetail.project.state?.nextAction ?? ''
+  stateVerificationInput.value = currentDetail.project.state?.lastVerification ?? ''
   workstreamStateStatus.textContent = ''
   setStateEditing(true)
   stateGoalInput.focus()
@@ -1203,16 +1969,18 @@ async function saveWorkstreamState() {
 function terminalLabel(kind: TerminalKind) {
   if (kind === 'claude') return 'Claude'
   if (kind === 'codex') return 'Codex'
+  if (kind === 'agy') return 'Antigravity'
   return 'Shell'
 }
 
 function sessionAgentKind(session: SessionRecord): AgentTerminalKind | null {
-  if (session.agentKind === 'claude' || session.agentKind === 'codex') return session.agentKind
+  if (session.agentKind === 'claude' || session.agentKind === 'codex' || session.agentKind === 'agy') return session.agentKind
   const title = session.title.toLowerCase()
   const transcriptPath = session.transcriptPath.toLowerCase()
 
   if (title.startsWith('claude terminal')) return 'claude'
   if (title.startsWith('codex terminal')) return 'codex'
+  if (title.startsWith('antigravity terminal')) return 'agy'
   if (transcriptPath.includes('/.claude/') || transcriptPath.includes('\\.claude\\')) return 'claude'
 
   return null
@@ -1246,12 +2014,12 @@ function isNativeClaudeSession(session: SessionRecord) {
     && (transcriptPath.includes('/.claude/projects/') || transcriptPath.includes('\\.claude\\projects\\'))
 }
 
-function latestClaudeResumeSessionId(detail: ProjectDetail | null) {
+function latestClaudeResumeSession(detail: ProjectDetail | null) {
   if (!detail) return undefined
   return detail.sessions
     .filter(isNativeClaudeSession)
     .slice()
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.id
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
 }
 
 function latestCodexResumeSession(detail: ProjectDetail | null) {
@@ -1262,8 +2030,20 @@ function latestCodexResumeSession(detail: ProjectDetail | null) {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
 }
 
+function latestAgyResumeSession(detail: ProjectDetail | null) {
+  if (!detail) return undefined
+  return detail.sessions
+    .filter(isNativeAgySession)
+    .slice()
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+}
+
 function isNativeCodexSession(session: SessionRecord) {
   return session.agentKind === 'codex' && !session.id.startsWith('terminal-')
+}
+
+function isNativeAgySession(session: SessionRecord) {
+  return session.agentKind === 'agy' && !session.id.startsWith('terminal-')
 }
 
 function primaryWorkstreamAgent(detail: ProjectDetail): AgentTerminalKind | null {
@@ -1294,37 +2074,63 @@ function renderWorkstreamLaunchLabels(detail: ProjectDetail | null) {
   if (!detail) {
     setButtonLabel(newClaudeButton, 'Claude')
     setButtonLabel(newCodexButton, 'Codex')
+    setButtonLabel(newAgyButton, 'AGY')
     newClaudeButton.classList.remove('active-toggle')
     newCodexButton.classList.remove('active-toggle')
+    newAgyButton.classList.remove('active-toggle')
+    newClaudeButton.classList.remove('quick-continue')
+    newCodexButton.classList.remove('quick-continue')
+    newAgyButton.classList.remove('quick-continue')
     newClaudeButton.setAttribute('aria-pressed', 'false')
     newCodexButton.setAttribute('aria-pressed', 'false')
+    newAgyButton.setAttribute('aria-pressed', 'false')
     newClaudeButton.title = 'Start Claude Code from this directory.'
     newCodexButton.title = 'Start Codex from this directory.'
+    newAgyButton.title = 'Start Antigravity CLI from this directory.'
     return
   }
 
   const primaryAgent = primaryWorkstreamAgent(detail)
   const runningClaude = runningWorkstreamAgentTerminal('claude')
   const runningCodex = runningWorkstreamAgentTerminal('codex')
-  const claudeResumeSessionId = latestClaudeResumeSessionId(detail)
+  const runningAgy = runningWorkstreamAgentTerminal('agy')
+  const claudeResumeSession = latestClaudeResumeSession(detail)
   const codexResumeSession = latestCodexResumeSession(detail)
-  const claudeVerb = runningClaude ? 'Show' : claudeResumeSessionId ? 'Resume' : 'Start'
+  const agyResumeSession = latestAgyResumeSession(detail)
+  const quickRunning = [runningClaude, runningCodex, runningAgy]
+    .filter((view): view is TerminalView => Boolean(view))
+    .sort((a, b) => Number(terminalNeedsInput(b)) - Number(terminalNeedsInput(a))
+      || (b.record.lastActivityAt ?? '').localeCompare(a.record.lastActivityAt ?? ''))[0]
+  const quickResume = [
+    { kind: 'claude', session: claudeResumeSession },
+    { kind: 'codex', session: codexResumeSession },
+    { kind: 'agy', session: agyResumeSession },
+  ].filter((entry) => entry.session)
+    .sort((a, b) => b.session!.updatedAt.localeCompare(a.session!.updatedAt))[0]
+  const quickKind = quickRunning?.record.kind ?? quickResume?.kind
+  const claudeVerb = runningClaude ? 'Show' : claudeResumeSession ? 'Resume' : detail.sessions.length ? 'Continue in' : 'Start'
   const codexVerb = runningCodex ? 'Show' : codexResumeSession ? 'Resume' : primaryAgent === 'codex' ? 'Continue' : 'Start'
 
   setButtonLabel(newClaudeButton, `${claudeVerb} Claude`)
   setButtonLabel(newCodexButton, `${codexVerb} Codex`)
+  setButtonLabel(newAgyButton, runningAgy ? 'Show Antigravity' : agyResumeSession ? 'Resume Antigravity' : 'Start AGY')
+  newClaudeButton.classList.toggle('quick-continue', quickKind === 'claude')
+  newCodexButton.classList.toggle('quick-continue', quickKind === 'codex')
+  newAgyButton.classList.toggle('quick-continue', quickKind === 'agy')
   newClaudeButton.classList.toggle('active-toggle', Boolean(runningClaude))
   newCodexButton.classList.toggle('active-toggle', Boolean(runningCodex))
+  newAgyButton.classList.toggle('active-toggle', Boolean(runningAgy))
   newClaudeButton.setAttribute('aria-pressed', runningClaude ? 'true' : 'false')
   newCodexButton.setAttribute('aria-pressed', runningCodex ? 'true' : 'false')
+  newAgyButton.setAttribute('aria-pressed', runningAgy ? 'true' : 'false')
   const claudeCodexBridge = hasAllowedCrossAgentContext(detail, 'claude')
     ? ' A compact Codex memory bridge will be pasted for review.'
     : ''
   newClaudeButton.title = runningClaude
     ? 'Show the running Claude terminal attached to this workstream.'
-    : claudeResumeSessionId
+    : claudeResumeSession
     ? 'Resume the latest Claude Code conversation with native claude --resume and attach the terminal here.'
-    : 'Start Claude Code from this workstream repo. Use Paste context for a manual handoff if needed.'
+    : 'No native Claude conversation is available to resume. Start Claude Code in this workstream and review the prepared context when available.'
   if (!runningClaude) newClaudeButton.title += claudeCodexBridge
   newCodexButton.title = runningCodex
     ? 'Show the running Codex terminal attached to this workstream.'
@@ -1335,6 +2141,11 @@ function renderWorkstreamLaunchLabels(detail: ProjectDetail | null) {
     : hasAllowedCrossAgentContext(detail, 'codex')
       ? 'Start Codex from this workstream repo and paste a compact Claude memory bridge for review.'
       : 'Start Codex from this workstream repo.'
+  newAgyButton.title = runningAgy
+    ? 'Show the running Antigravity CLI terminal attached to this workstream.'
+    : agyResumeSession
+      ? 'Resume the latest discovered Antigravity CLI conversation with agy --conversation.'
+      : 'Start Antigravity CLI from this workstream repo. App conversations can be imported from its /resume picker.'
 }
 
 function updateGlobalLaunchControls() {
@@ -1360,12 +2171,22 @@ function pathBasename(value: string) {
 function writeTerminalData(view: TerminalView, data: string, logBytes?: number) {
   if (logBytes !== undefined) view.record.logBytes = logBytes
   if (!data) return false
+  if (view.awaitingRedraw) {
+    view.awaitingRedraw = false
+    if (view.record.id === activeTerminalId) renderTerminalStatus()
+  }
   const needsInputSuppressionChanged = updateTerminalNeedsInputSuppression(view, data)
   if (view.logRestored) {
     queueTerminalWrite(view, data, { scroll: true })
     return needsInputSuppressionChanged
   }
+  // Keep a bounded tail before replay: the sidecar log may still be flushing
+  // its newest output when the renderer asks to read it.
   view.pendingData.push({ data, logBytes })
+  view.pendingDataChars += data.length
+  while ((view.pendingDataChars > 1024 * 1024 || view.pendingData.length > 512) && view.pendingData.length > 1) {
+    view.pendingDataChars -= view.pendingData.shift()!.data.length
+  }
   return needsInputSuppressionChanged
 }
 
@@ -1536,17 +2357,34 @@ function terminalScreenOverflowRows(view: TerminalView) {
   return Math.ceil(overflowPx / Math.max(1, measureTerminalCell(view).height))
 }
 
+function terminalScreenOverflowCols(view: TerminalView) {
+  const xterm = view.element.querySelector<HTMLElement>('.xterm')
+  const screen = view.element.querySelector<HTMLElement>('.xterm-screen')
+  if (!xterm || !screen) return 0
+  const visibleWidth = xterm.clientWidth - TERMINAL_SCROLLBAR_GUTTER_PX
+  const screenWidth = screen.getBoundingClientRect().width
+  if (visibleWidth <= 0 || screenWidth <= 0) return 0
+  const overflowPx = screenWidth - visibleWidth
+  if (overflowPx <= 1) return 0
+  const cellWidth = screenWidth / Math.max(1, view.terminal.cols)
+  return Math.ceil(overflowPx / Math.max(1, cellWidth))
+}
+
 function resizeTerminalToFit(view: TerminalView, cols: number, initialRows: number) {
   let rows = initialRows
+  let fittedCols = cols
   for (let pass = 0; pass < TERMINAL_FIT_MAX_TRIM_PASSES; pass += 1) {
-    view.terminal.resize(cols, rows)
+    view.terminal.resize(fittedCols, rows)
+    const overflowCols = terminalScreenOverflowCols(view)
     const overflowRows = terminalScreenOverflowRows(view)
-    if (overflowRows <= 0) return { cols, rows }
-    const nextRows = Math.max(12, rows - overflowRows - 1)
-    if (nextRows === rows) return { cols, rows }
+    if (overflowCols <= 0 && overflowRows <= 0) return { cols: fittedCols, rows }
+    const nextCols = Math.max(40, fittedCols - overflowCols)
+    const nextRows = overflowRows > 0 ? Math.max(12, rows - overflowRows - 1) : rows
+    if (nextCols === fittedCols && nextRows === rows) return { cols: fittedCols, rows }
+    fittedCols = nextCols
     rows = nextRows
   }
-  return { cols, rows }
+  return { cols: fittedCols, rows }
 }
 
 function fitTerminalWithAddon(view: TerminalView) {
@@ -1562,14 +2400,33 @@ function fitTerminalWithAddon(view: TerminalView) {
 function fitTerminalView(view: TerminalView | undefined) {
   if (!view) return
   if (view.element.classList.contains('hidden') || terminalHost.classList.contains('hidden')) return
+  if (!view.element.getClientRects().length || view.element.clientWidth < 120 || view.element.clientHeight < 120) return
   let fitted = fitTerminalWithAddon(view)
   if (!fitted) {
     const fallback = preferredTerminalSize(view)
     fitted = resizeTerminalToFit(view, fallback.cols, fallback.rows)
   }
   scrollTerminalToBottom(view)
+  if (!view.logRestoreStarted && view.record.kind === 'agy' && view.record.status === 'running') {
+    // AGY repeatedly redraws in place. Replaying its old cursor movements at
+    // a different window size can overwrite or clip text. Let the live PTY
+    // redraw the current screen after resize instead.
+    view.logRestoreStarted = true
+    view.logRestored = true
+    view.awaitingRedraw = true
+    view.pendingData = []
+    view.pendingDataChars = 0
+    renderTerminalStatus()
+  }
   if (view.record.status === 'running') {
     void window.gogoagent.terminals.resize(view.record.id, fitted.cols, fitted.rows)
+  }
+  // Cursor-addressed agents such as AGY must be replayed at the visible size.
+  // xterm cannot reliably reflow a full-screen transcript written at 80x24
+  // while its pane was hidden.
+  if (!view.logRestoreStarted) {
+    view.logRestoreStarted = true
+    void restoreTerminalLog(view)
   }
 }
 
@@ -1619,6 +2476,7 @@ async function restoreTerminalLog(view: TerminalView) {
     if (terminalViews.get(view.record.id) !== view) return
     view.logRestored = true
     const pending = view.pendingData.splice(0)
+    view.pendingDataChars = 0
     for (const entry of pending) {
       if (entry.logBytes === undefined || entry.logBytes > replayBytes) {
         view.terminal.write(entry.data)
@@ -1680,19 +2538,21 @@ function ensureTerminalView(record: TerminalSessionRecord) {
     terminal,
     fitAddon,
     element,
+    logRestoreStarted: false,
     logRestored: false,
     pendingData: [],
+    pendingDataChars: 0,
     pendingWrites: [],
     writeFrame: null,
     scrollGeneration: 0,
   }
   terminalViews.set(record.id, view)
-  void restoreTerminalLog(view)
   renderTerminalTabs()
   return view
 }
 
 function selectTerminal(id: string | null) {
+  if (id && currentDetail) setWorkstreamView('terminal')
   activeTerminalId = id
   const view = id ? terminalViews.get(id) : undefined
   const workstreamId = view?.record.workstreamId
@@ -1893,7 +2753,7 @@ function renderTerminalStatus() {
     return
   }
 
-  const pasteHint = view.record.kind === 'shell'
+  const pasteHint = view.record.kind === 'shell' || view.record.kind === 'agy'
     ? ' · paste context is only enabled for Claude/Codex tabs'
     : ''
   const logHint = view.record.logError
@@ -1901,9 +2761,10 @@ function renderTerminalStatus() {
     : view.record.logPath
       ? ` · log ${fmtBytes(view.record.logBytes)}`
       : ''
-  terminalStatus.textContent = `${view.record.status} · ${compactPath(view.record.cwd)}${logHint}${pasteHint}`
+  const redrawHint = view.awaitingRedraw ? ' · waiting for Antigravity to redraw' : ''
+  terminalStatus.textContent = `${view.record.status} · ${compactPath(view.record.cwd)}${logHint}${redrawHint}${pasteHint}`
   terminalCopyContextButton.disabled = !currentDetail
-  terminalPasteContextButton.disabled = !currentDetail || view.record.status !== 'running' || view.record.kind === 'shell'
+  terminalPasteContextButton.disabled = !currentDetail || view.record.status !== 'running' || (view.record.kind !== 'claude' && view.record.kind !== 'codex')
   terminalCopyLogButton.disabled = !view.record.logPath || view.record.logBytes === 0
   const isRunning = view.record.status === 'running'
   terminalCloseButton.disabled = false
@@ -2035,9 +2896,9 @@ async function prepareContinuation(
   return { detail, targetKind, resumeSessionId, resumeSessionTitle, context, repository } satisfies ContinuationReview
 }
 
-async function createTerminal(kind: TerminalKind, selectedCodexSessionId?: string) {
+async function createTerminal(kind: TerminalKind, selectedNativeSessionId?: string) {
   const label = terminalLabel(kind)
-  if (selectedCodexSessionId && !currentDetail) return null
+  if (selectedNativeSessionId && !currentDetail) return null
   if (!currentDetail) {
     const activeView = activeTerminalId ? terminalViews.get(activeTerminalId) : undefined
     const cwd = activeView?.record.cwd ?? terminalOnlyCwd ?? globalCwdInput.value.trim()
@@ -2063,24 +2924,41 @@ async function createTerminal(kind: TerminalKind, selectedCodexSessionId?: strin
 
   try {
     const detailAtLaunch = currentDetail
+    const claudeResumeSession = kind === 'claude'
+      ? selectedNativeSessionId
+        ? detailAtLaunch.sessions.find((session) => session.id === selectedNativeSessionId && isNativeClaudeSession(session))
+        : latestClaudeResumeSession(detailAtLaunch)
+      : undefined
     const codexResumeSession = kind === 'codex'
-      ? selectedCodexSessionId
-        ? detailAtLaunch.sessions.find((session) => session.id === selectedCodexSessionId && isNativeCodexSession(session))
+      ? selectedNativeSessionId
+        ? detailAtLaunch.sessions.find((session) => session.id === selectedNativeSessionId && isNativeCodexSession(session))
         : latestCodexResumeSession(detailAtLaunch)
       : undefined
-    if (selectedCodexSessionId && !codexResumeSession) {
-      terminalStatus.textContent = 'That Codex session is no longer in this workstream. Refresh and try again.'
+    const agyResumeSession = kind === 'agy'
+      ? selectedNativeSessionId
+        ? detailAtLaunch.sessions.find((session) => session.id === selectedNativeSessionId && isNativeAgySession(session))
+        : latestAgyResumeSession(detailAtLaunch)
+      : undefined
+    if (selectedNativeSessionId && !claudeResumeSession && !codexResumeSession && !agyResumeSession) {
+      terminalStatus.textContent = 'That session is no longer in this workstream. Refresh and try again.'
       return null
     }
-    const resumeSessionId = kind === 'claude'
-      ? latestClaudeResumeSessionId(detailAtLaunch)
-      : codexResumeSession?.id
+    const resumeSessionId = claudeResumeSession?.id ?? codexResumeSession?.id ?? agyResumeSession?.id
+    const alreadyRunning = resumeSessionId
+      ? [...terminalViews.values()].find((view) => (
+        view.record.kind === kind && view.record.resumeSessionId === resumeSessionId && view.record.status === 'running'
+      ))
+      : undefined
+    if (alreadyRunning) {
+      await openTerminalWorkstream(alreadyRunning.record)
+      return alreadyRunning.record
+    }
     const primaryAgent = primaryWorkstreamAgent(detailAtLaunch)
     const newerClaudeSession = codexResumeSession && detailAtLaunch.sessions.some((session) => (
       sessionAgentKind(session) === 'claude' && session.updatedAt > codexResumeSession.updatedAt
     ))
     const launchContextKind: 'resume' | 'bridge' | null =
-      kind === 'codex' && !resumeSessionId && primaryAgent === 'codex'
+      ((kind === 'codex' && primaryAgent === 'codex') || (kind === 'claude' && primaryAgent === 'claude')) && !resumeSessionId
         ? 'resume'
         : (kind === 'claude' || (kind === 'codex' && (!resumeSessionId || newerClaudeSession)))
           && hasAllowedCrossAgentContext(detailAtLaunch, kind)
@@ -2088,10 +2966,10 @@ async function createTerminal(kind: TerminalKind, selectedCodexSessionId?: strin
           : null
     let reviewedContext: string | undefined
     let repository: RepositoryState | undefined
-    if (kind === 'claude' || kind === 'codex') {
+    if (kind !== 'shell') {
       terminalStatus.textContent = 'Preparing continuation review...'
       const review = await prepareContinuation(
-        detailAtLaunch, kind, resumeSessionId, launchContextKind, codexResumeSession?.title,
+        detailAtLaunch, kind, resumeSessionId, launchContextKind, claudeResumeSession?.title ?? codexResumeSession?.title ?? agyResumeSession?.title,
       )
       repository = review.repository
       const result = await reviewContinuation(review)
@@ -2105,7 +2983,7 @@ async function createTerminal(kind: TerminalKind, selectedCodexSessionId?: strin
     const size = preferredTerminalSize()
     const record = await window.gogoagent.terminals.create({
       kind,
-      cwd: codexResumeSession?.cwd ?? detailAtLaunch.project.repoRoot,
+      cwd: claudeResumeSession?.cwd ?? codexResumeSession?.cwd ?? agyResumeSession?.cwd ?? detailAtLaunch.project.repoRoot,
       workstreamId: detailAtLaunch.project.id,
       gitBranch: detailAtLaunch.project.branch,
       resumeSessionId,
@@ -2118,19 +2996,19 @@ async function createTerminal(kind: TerminalKind, selectedCodexSessionId?: strin
     if (repository) rememberContinuationRepository(detailAtLaunch, repository)
     if (reviewedContext) {
       terminalStatus.textContent = launchContextKind === 'resume'
-        ? 'Preparing Codex resume context...'
+        ? `Preparing ${label} resume context...`
         : `Preparing ${label} memory bridge...`
       window.setTimeout(() => {
         void pasteResumeContextIntoTerminal(record.id, detailAtLaunch, {
           contextKind: launchContextKind ?? undefined,
           flash: false,
-          targetKind: kind === 'claude' || kind === 'codex' ? kind : undefined,
+          targetKind: kind === 'shell' ? undefined : kind,
           preparedContext: reviewedContext,
         })
           .then((pasted) => {
             if (pasted) {
               terminalStatus.textContent = launchContextKind === 'resume'
-                ? 'Codex resume context pasted. Review and send when ready.'
+                ? `${label} resume context pasted. Review and send when ready.`
                 : `${label} memory bridge pasted. Review and send when ready.`
             }
           })
@@ -2148,11 +3026,16 @@ async function createTerminal(kind: TerminalKind, selectedCodexSessionId?: strin
 
 function showDraftWorkstream(view?: TerminalView) {
   projectSelectionVersion++
+  appShell.classList.add('detail-selected')
+  appShell.classList.remove('sidebar-open')
+  setKnowledgeOpen(false)
   const cwd = view?.record.cwd ?? globalCwdInput.value.trim()
   if (view) terminalOnlyCwd = view.record.cwd
   else terminalOnlyCwd = null
   selectedProjectId = null
   currentDetail = null
+  readingListOpen = false
+  renderReadingList()
   activeTerminalId = view?.record.id ?? null
   setRenameEditing(false)
   renameStatus.textContent = ''
@@ -2160,6 +3043,7 @@ function showDraftWorkstream(view?: TerminalView) {
   detailEmpty.classList.add('hidden')
   detailRoot.classList.remove('hidden')
   detailRoot.classList.add('terminal-only')
+  detailRoot.dataset.view = 'terminal'
   detailRoot.classList.remove('terminal-focus')
   detailSubtitle.textContent = 'Draft workstream'
   detailTitle.textContent = view?.record.title ?? (cwd ? pathBasename(cwd) || cwd : 'New workstream')
@@ -2167,7 +3051,7 @@ function showDraftWorkstream(view?: TerminalView) {
     ? `${compactPath(view.record.cwd)} · not saved yet`
     : `${cwd ? compactPath(cwd) : 'Default directory'} · not saved yet`
   detailMeta.title = view?.record.cwd ?? cwd
-  terminalHelp.textContent = 'Choose Claude, Codex, or Shell to begin.'
+  terminalHelp.textContent = 'Choose Claude, Codex, AGY, or Shell to begin.'
   renderWorkstreamLaunchLabels(null)
   renderTerminalFocusButton(null)
   refineStatus.textContent = ''
@@ -2447,6 +3331,8 @@ async function pasteResumeContextIntoActiveTerminal() {
 async function loadExistingTerminals() {
   const records = await window.gogoagent.terminals.list()
   for (const record of records) ensureTerminalView(record)
+  projects = sortProjectsByActivity(projects)
+  renderProjectsList()
   renderTerminalTabs()
 }
 
@@ -2610,9 +3496,13 @@ function pinnedWorkstreamRank(projectId: string) {
 }
 
 function projectAttentionRank(project: Project) {
-  if (projectNeedsInputTerminalIds(project).length > 0) return 0
-  if ((project.activeTerminalIds?.length ?? 0) > 0) return 1
-  return 2
+  const activeAgents = [...terminalViews.values()].filter((view) =>
+    view.record.workstreamId === project.id && view.record.kind !== 'shell' && view.record.status === 'running')
+  if (activeAgents.some(terminalNeedsInput)) return 0
+  if (activeAgents.length > 0) return 1
+  if (projectNeedsInputTerminalIds(project).length > 0) return 2
+  if ((project.activeTerminalIds?.length ?? 0) > 0) return 3
+  return 4
 }
 
 function sortProjectsByActivity(items: Project[]) {
@@ -2644,6 +3534,26 @@ function togglePinnedWorkstream(projectId: string) {
   saveStringSet(PINNED_WORKSTREAMS_STORAGE_KEY, pinnedWorkstreamIds)
   projects = sortProjectsByActivity(projects)
   renderProjectsList()
+}
+
+function movePinnedWorkstream(projectId: string, direction: -1 | 1, focus: 'card' | 'button' | 'none' = 'button', candidates?: string[]) {
+  const visiblePinned = candidates ?? projects.filter((project) => pinnedWorkstreamIds.has(project.id)).map((project) => project.id)
+  const index = visiblePinned.indexOf(projectId)
+  const neighborId = visiblePinned[index + direction]
+  if (index < 0 || !neighborId) return
+  const order = [...pinnedWorkstreamIds]
+  const a = order.indexOf(projectId)
+  const b = order.indexOf(neighborId)
+  ;[order[a], order[b]] = [order[b], order[a]]
+  pinnedWorkstreamIds.clear()
+  order.forEach((id) => pinnedWorkstreamIds.add(id))
+  saveStringSet(PINNED_WORKSTREAMS_STORAGE_KEY, pinnedWorkstreamIds)
+  projects = sortProjectsByActivity(projects)
+  renderProjectsList()
+  const card = [...projectsList.querySelectorAll<HTMLElement>('.project-card')]
+    .find((item) => item.dataset.projectId === projectId)
+  if (focus === 'card') card?.focus()
+  else if (focus === 'button') card?.querySelector<HTMLButtonElement>(`button[data-move-direction="${direction}"]`)?.focus()
 }
 
 function markWorkstreamUnread(workstreamId: string | undefined) {
@@ -2681,6 +3591,7 @@ async function openAttentionItem(item: AttentionItem) {
     return
   }
   if (item.kind === 'blocked') {
+    setWorkstreamView('overview')
     if (terminalFocusWorkstreamIds.delete(item.workstreamId)) {
       saveStringSet(TERMINAL_FOCUS_WORKSTREAMS_STORAGE_KEY, terminalFocusWorkstreamIds)
       applyTerminalFocus(currentDetail?.project ?? null)
@@ -2697,6 +3608,8 @@ function renderAttention() {
   })
   attentionSection.classList.toggle('hidden', visible.length === 0)
   attentionCount.textContent = String(visible.length)
+  workstreamsToggleCount.textContent = visible.length ? `${visible.length} need you` : ''
+  workstreamsToggleCount.classList.toggle('hidden', visible.length === 0)
   if (!visible.length) {
     attentionList.innerHTML = ''
     return
@@ -2744,10 +3657,14 @@ function renderProjectsList() {
     return
   }
 
+  const visiblePinnedIds = projects.filter((project) => pinnedWorkstreamIds.has(project.id)).map((project) => project.id)
+  const showOrderControls = !projectsSearch.value.trim()
+
   projectsList.innerHTML = filtered
     .map((project) => {
       const selected = project.id === selectedProjectId ? ' selected' : ''
       const pinned = pinnedWorkstreamIds.has(project.id)
+      const pinnedIndex = visiblePinnedIds.indexOf(project.id)
       const unread = unreadWorkstreamIds.has(project.id) || (project.newSinceLastView && project.id !== selectedProjectId)
       const statusNote = workstreamStatusNote(project.id)
       const branch = project.branch ? `<span class="badge subtle">${esc(project.branch)}</span>` : ''
@@ -2780,6 +3697,10 @@ function renderProjectsList() {
               ${unread ? '<span class="badge subtle">New</span>' : ''}
             </span>
             <span class="project-card-controls">
+              ${pinned && showOrderControls && visiblePinnedIds.length > 1 ? `
+                <button class="project-move-button icon-button secondary-button" type="button" data-move-project-id="${esc(project.id)}" data-move-direction="-1" title="Move pinned workstream up (Alt+↑ when focused)." aria-label="Move ${esc(project.name)} up" ${pinnedIndex === 0 ? 'disabled' : ''}>${iconMarkup('arrow-up')}</button>
+                <button class="project-move-button icon-button secondary-button" type="button" data-move-project-id="${esc(project.id)}" data-move-direction="1" title="Move pinned workstream down (Alt+↓ when focused)." aria-label="Move ${esc(project.name)} down" ${pinnedIndex === visiblePinnedIds.length - 1 ? 'disabled' : ''}>${iconMarkup('arrow-down')}</button>
+              ` : ''}
               <button class="project-pin-button icon-button secondary-button${pinned ? ' pinned' : ''}" type="button" data-pin-project-id="${esc(project.id)}" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinned ? 'true' : 'false'}">
                 ${iconMarkup('pin')}
               </button>
@@ -2809,6 +3730,16 @@ function renderProjectsList() {
     })
   })
 
+  projectsList.querySelectorAll<HTMLButtonElement>('.project-move-button').forEach((button) => {
+    button.addEventListener('keydown', (event) => event.stopPropagation())
+    button.addEventListener('click', (event) => {
+      event.stopPropagation()
+      const id = button.dataset.moveProjectId
+      const direction = Number(button.dataset.moveDirection)
+      if (id && (direction === -1 || direction === 1)) movePinnedWorkstream(id, direction)
+    })
+  })
+
   projectsList.querySelectorAll<HTMLButtonElement>('.project-input-indicator').forEach((button) => {
     button.addEventListener('keydown', (event) => {
       event.stopPropagation()
@@ -2834,6 +3765,12 @@ function renderProjectsList() {
     }
     card.addEventListener('click', open)
     card.addEventListener('keydown', (event) => {
+      if (event.altKey && !event.ctrlKey && !event.metaKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        event.preventDefault()
+        const id = card.dataset.projectId
+        if (id && pinnedWorkstreamIds.has(id) && showOrderControls) movePinnedWorkstream(id, event.key === 'ArrowUp' ? -1 : 1, 'card')
+        return
+      }
       if (event.key !== 'Enter' && event.key !== ' ') return
       event.preventDefault()
       open()
@@ -2878,8 +3815,12 @@ function syncProjectFromDetail(project: Project) {
 }
 
 function showEmptyDetail(message = 'Select a workstream.') {
+  appShell.classList.remove('detail-selected', 'sidebar-open')
+  setKnowledgeOpen(false)
   selectedProjectId = null
   currentDetail = null
+  readingListOpen = false
+  renderReadingList()
   setStateEditing(false)
   workstreamStateStatus.textContent = ''
   setRenameEditing(false)
@@ -2900,12 +3841,39 @@ function showEmptyDetail(message = 'Select a workstream.') {
 // ---------- Project detail ----------
 async function selectProject(projectId: string) {
   const selectionVersion = ++projectSelectionVersion
+  appShell.classList.add('detail-selected')
+  appShell.classList.remove('sidebar-open')
+  workstreamsToggle.setAttribute('aria-expanded', 'false')
+  setKnowledgeOpen(false)
   const switchedWorkstreams = selectedProjectId !== projectId
+  if (switchedWorkstreams) {
+    readingListOpen = false
+    workstreamHandoff.open = false
+    changeVisit = { workstreamId: projectId, ready: false }
+    changeSessionDetails = []
+    changeSessionCount = 0
+    changeSessionLoad = 'loading'
+    currentWorkstreamView = 'overview'
+    detailRoot.dataset.view = 'overview'
+    currentWorkstreamDocument = null
+    pendingWorkstreamDocument = null
+    documentEditing = false
+    documentStatus.textContent = ''
+    overviewChatQuestion.value = ''
+    overviewChatStatus.textContent = ''
+    overviewChatHistory.innerHTML = '<p class="meta">Loading workstream knowledge…</p>'
+    investigations = []
+    investigationParentLink = undefined
+    investigationStatus.textContent = ''
+    investigationList.innerHTML = '<p class="meta">Loading linked investigations…</p>'
+    investigationParent.classList.add('hidden')
+  }
   if (switchedWorkstreams && selectedProjectId) {
     void window.gogoagent.projects.markViewed(selectedProjectId, activeTerminalId ?? undefined).catch(() => undefined)
   }
   const cachedDetail = getCachedValue(projectDetailCache, projectId, PROJECT_DETAIL_CACHE_MS)
   selectedProjectId = projectId
+  renderReadingList()
   setStateEditing(false)
   workstreamStateStatus.textContent = ''
   clearWorkstreamUnread(projectId)
@@ -2922,6 +3890,8 @@ async function selectProject(projectId: string) {
   if (cachedDetail) {
     currentDetail = cachedDetail
     renderDetail(cachedDetail)
+    renderOverviewChat()
+    renderInvestigations()
   } else {
     currentDetail = null
     detailTitle.textContent = 'Loading…'
@@ -2945,11 +3915,24 @@ async function selectProject(projectId: string) {
     const freshDetail = await getProjectDetail(projectId)
     if (selectionVersion !== projectSelectionVersion || selectedProjectId !== projectId) return
     currentDetail = freshDetail
+    if (changeVisit?.workstreamId === projectId && !changeVisit.ready) {
+      changeVisit.previousViewedAt = freshDetail.project.view?.viewedAt
+      changeVisit.ready = true
+    }
+    const changeBaselineMs = changeVisit?.previousViewedAt ? Date.parse(changeVisit.previousViewedAt) : Number.NaN
+    changeSessionCount = freshDetail.sessions.filter((session) => !changeVisit?.previousViewedAt
+      || (Number.isFinite(changeBaselineMs) && Date.parse(session.updatedAt) > changeBaselineMs)).length
+    changeSessionLoad = 'loading'
     if (freshDetail.project.view?.terminalId) {
       lastViewedTerminalIdsByWorkstream.set(projectId, freshDetail.project.view.terminalId)
     }
     syncProjectFromDetail(currentDetail.project)
     renderDetail(currentDetail)
+    renderOverviewChat()
+    void loadWorkstreamDocument(projectId, selectionVersion)
+    void loadWorkstreamChanges(currentDetail, selectionVersion)
+    void loadInvestigations(projectId, selectionVersion)
+    void loadWorkstreamContextPreview(currentDetail, selectionVersion)
     updateGlobalLaunchControls()
     if (!freshDetail.project.archivedAt) {
       void window.gogoagent.projects.markViewed(projectId, activeTerminalId ?? undefined)
@@ -2988,8 +3971,147 @@ function renderTerminalFocusButton(project: Project | null) {
   terminalFocusButton.setAttribute('aria-label', focused ? 'Show timeline and details' : 'Focus terminal')
 }
 
+function setWorkstreamView(view: 'overview' | 'activity' | 'terminal') {
+  if (view !== 'overview') setKnowledgeOpen(false)
+  currentWorkstreamView = view
+  detailRoot.dataset.view = view
+  workstreamViewTabs.querySelectorAll<HTMLButtonElement>('.workstream-view-tab').forEach((button) => {
+    button.setAttribute('aria-pressed', button.dataset.view === view ? 'true' : 'false')
+  })
+  applyTerminalFocus(currentDetail?.project ?? null)
+  if (view === 'terminal') {
+    const terminal = activeTerminalId ? terminalViews.get(activeTerminalId) : undefined
+    scheduleTerminalFit(terminal)
+  }
+  contentRoot.scrollTop = 0
+}
+
+function switcherTargets(query: string): SwitcherTarget[] {
+  const workstream = currentDetail?.project
+  const views: SwitcherTarget[] = switcherScope === 'current' && workstream
+    ? (['overview', 'activity', 'terminal'] as const).map((view) => ({
+        kind: 'view',
+        title: view[0].toUpperCase() + view.slice(1),
+        detail: workstream.name,
+        view,
+      }))
+    : []
+  const terminals: SwitcherTarget[] = (switcherScope === 'current' ? currentWorkstreamTerminals() : [])
+    .sort((a, b) => {
+      const priority = (view: TerminalView) => terminalNeedsInput(view) ? 2 : view.record.status === 'running' ? 1 : 0
+      return priority(b) - priority(a)
+        || (b.record.lastActivityAt ?? b.record.startedAt).localeCompare(a.record.lastActivityAt ?? a.record.startedAt)
+    })
+    .map((view) => {
+      const record = view.record
+      const owner = projects.find((project) => project.id === record.workstreamId)?.name ?? compactPath(record.cwd)
+      const status = terminalNeedsInput(view) ? 'Needs input' : record.status === 'running' ? 'Running' : 'Ended'
+      return { kind: 'terminal', title: record.title, detail: `${owner} · ${terminalLabel(record.kind)} · ${status}`, id: record.id }
+    })
+  const activeAgentIds = new Set([...terminalViews.values()]
+    .filter((view) => view.record.kind !== 'shell' && view.record.status === 'running')
+    .map((view) => view.record.id))
+  const currentTargets: SwitcherTarget[] = []
+  if (views[0]) currentTargets.push(views[0])
+  currentTargets.push(...terminals.filter((target) => target.kind === 'terminal' && activeAgentIds.has(target.id)))
+  currentTargets.push(...views.slice(1))
+  currentTargets.push(...terminals.filter((target) => target.kind === 'terminal' && !activeAgentIds.has(target.id)))
+  const workstreams: SwitcherTarget[] = (switcherScope === 'workstreams' ? projects : [])
+    .map((project) => {
+      const attention = projectAttentionRank(project)
+      const status = attention === 0 ? 'Agent needs input · '
+        : attention === 1 ? 'Agent running · '
+          : attention === 2 ? 'Terminal needs input · '
+            : attention === 3 ? 'Terminal running · ' : ''
+      return {
+        kind: 'workstream',
+        title: project.name,
+        detail: `${pinnedWorkstreamIds.has(project.id) ? 'Pinned · ' : ''}${status}${compactPath(project.repoRoot)}${project.archivedAt ? ' · Archived' : ''}`,
+        id: project.id,
+      }
+    })
+  const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean)
+  const matches = (target: SwitcherTarget) => terms.every((term) =>
+    `${target.kind} ${target.title} ${target.detail}`.toLocaleLowerCase().includes(term))
+  const targets = switcherScope === 'workstreams' ? workstreams : currentTargets
+  if (terms.length) return targets.filter(matches).slice(0, 40)
+  return switcherScope === 'workstreams' ? targets.slice(0, 20) : targets
+}
+
+function renderSwitcher() {
+  switcherItems = switcherTargets(switcherQuery.value.trim())
+  switcherIndex = Math.min(switcherIndex, Math.max(0, switcherItems.length - 1))
+  if (!switcherItems.length) {
+    renderEmpty(switcherResults, switcherScope === 'workstreams' ? 'No matching workstreams.' : 'No matching views or terminals.')
+    return
+  }
+  switcherResults.innerHTML = switcherItems.map((target, index) => `
+    <button class="switcher-row${index === switcherIndex ? ' active' : ''}" type="button" data-switcher-index="${index}" ${index === switcherIndex ? 'aria-current="true"' : ''}>
+      <span class="switcher-kind">${esc(target.kind)}</span>
+      <span class="switcher-copy"><span class="switcher-name">${esc(target.title)}</span><span class="switcher-detail">${esc(target.detail)}</span></span>
+    </button>
+  `).join('')
+}
+
+function openSwitcher(scope: 'workstreams' | 'current') {
+  if (!switcherDialog.open && document.querySelector('dialog[open]')) return
+  if (!switcherDialog.open) switcherReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  switcherScope = scope === 'current' && !currentDetail && !currentWorkstreamTerminals().length ? 'workstreams' : scope
+  switcherDialog.dataset.scope = switcherScope
+  switcherTitle.textContent = switcherScope === 'workstreams' ? 'Switch workstream' : `Switch within ${currentDetail?.project.name ?? 'this workstream'}`
+  switcherQuery.placeholder = switcherScope === 'workstreams' ? 'Find a workstream…' : 'Find a view or terminal…'
+  switcherHelp.textContent = switcherScope === 'workstreams'
+    ? '↑↓ choose · Enter open · Alt+P pin · Alt+↑↓ order pinned · Esc close'
+    : '↑↓ choose · Enter open · Esc close · Ctrl/Cmd+Shift+P for workstreams'
+  switcherQuery.value = ''
+  switcherIndex = 0
+  renderSwitcher()
+  if (switcherScope === 'current' && currentWorkstreamView === 'overview') {
+    const activeAgent = switcherItems.findIndex((item) => {
+      if (item.kind !== 'terminal') return false
+      const view = terminalViews.get(item.id)
+      return view?.record.kind !== 'shell' && view?.record.status === 'running'
+    })
+    if (activeAgent >= 0) {
+      switcherIndex = activeAgent
+      renderSwitcher()
+    }
+  }
+  if (!switcherDialog.open) switcherDialog.showModal()
+  switcherQuery.focus()
+}
+
+function openKeyboardHelp() {
+  if (keyboardHelpDialog.open || document.querySelector('dialog[open]')) return
+  keyboardHelpDialog.showModal()
+}
+
+async function chooseSwitcherTarget(index: number) {
+  const target = switcherItems[index]
+  if (!target) return
+  switcherSelecting = true
+  switcherDialog.close()
+  try {
+    if (target.kind === 'terminal') {
+      const view = terminalViews.get(target.id)
+      if (view) await openTerminalWorkstream(view.record)
+    } else if (target.kind === 'workstream') {
+      if (selectedProjectId === target.id) setWorkstreamView('overview')
+      else await selectProject(target.id)
+      workstreamViewTabs.querySelector<HTMLButtonElement>('[data-view="overview"]')?.focus()
+    } else if (target.view === 'terminal' && activeTerminalId && terminalViews.has(activeTerminalId)) {
+      selectTerminal(activeTerminalId)
+    } else {
+      setWorkstreamView(target.view)
+      workstreamViewTabs.querySelector<HTMLButtonElement>(`[data-view="${target.view}"]`)?.focus()
+    }
+  } catch (error) {
+    setAppNotice(`Could not switch: ${(error as Error).message}`)
+  }
+}
+
 function applyTerminalFocus(project: Project | null) {
-  const focused = project ? terminalFocusWorkstreamIds.has(project.id) : false
+  const focused = project && currentWorkstreamView === 'terminal' ? terminalFocusWorkstreamIds.has(project.id) : false
   detailRoot.classList.toggle('terminal-focus', focused)
   renderTerminalFocusButton(project)
   if (focused) {
@@ -3007,6 +4129,7 @@ function toggleTerminalFocus() {
     terminalFocusWorkstreamIds.add(project.id)
   }
   saveStringSet(TERMINAL_FOCUS_WORKSTREAMS_STORAGE_KEY, terminalFocusWorkstreamIds)
+  setWorkstreamView('terminal')
   applyTerminalFocus(project)
 }
 
@@ -3015,6 +4138,10 @@ function renderDetail(detail: ProjectDetail) {
   setRenameEditing(false)
   renameStatus.textContent = ''
   detailRoot.classList.remove('terminal-only')
+  detailRoot.dataset.view = currentWorkstreamView
+  workstreamViewTabs.querySelectorAll<HTMLButtonElement>('.workstream-view-tab').forEach((button) => {
+    button.setAttribute('aria-pressed', button.dataset.view === currentWorkstreamView ? 'true' : 'false')
+  })
   terminalHelp.textContent = ''
   renderWorkstreamLaunchLabels(detail)
   detailTitle.textContent = project.name
@@ -3038,6 +4165,7 @@ function renderDetail(detail: ProjectDetail) {
   archiveWorkstreamButton.classList.toggle('danger-button', !project.archivedAt)
 
   renderTerminalTabs()
+  renderWorkstreamDocument()
   renderWorkstreamDigest(detail)
   updateTimelineControls()
   void renderTimeline(detail)
@@ -3247,8 +4375,16 @@ function orderedTimelineMessages(messages: SessionMessageRecord[]) {
 }
 
 function renderSessionResumeButton(session: SessionRecord) {
-  if (!isNativeCodexSession(session)) return ''
-  return `<button class="small-button timeline-resume-button" type="button" data-session-id="${esc(session.id)}" title="Resume this Codex conversation.">${buttonContent('bot', 'Resume Codex')}</button>`
+  if (isNativeClaudeSession(session)) {
+    return `<button class="small-button timeline-resume-button" type="button" data-session-id="${esc(session.id)}" data-agent-kind="claude" title="Resume this Claude Code conversation.">${buttonContent('bot', 'Resume Claude')}</button>`
+  }
+  if (isNativeCodexSession(session)) {
+    return `<button class="small-button timeline-resume-button" type="button" data-session-id="${esc(session.id)}" data-agent-kind="codex" title="Resume this Codex conversation.">${buttonContent('code-2', 'Resume Codex')}</button>`
+  }
+  if (isNativeAgySession(session)) {
+    return `<button class="small-button timeline-resume-button" type="button" data-session-id="${esc(session.id)}" data-agent-kind="agy" title="Resume this Antigravity CLI conversation.">${buttonContent('lightbulb', 'Resume AGY')}</button>`
+  }
+  return ''
 }
 
 function renderTimelineSession(detail: SessionDetail, index: number) {
@@ -3285,10 +4421,10 @@ function renderTimelineSession(detail: SessionDetail, index: number) {
                 aria-expanded="${collapsed ? 'false' : 'true'}"
                 title="${collapsed ? 'Show this chat in the timeline.' : 'Hide this chat in the timeline.'}"
               >${buttonContent(collapsed ? 'chevron-right' : 'chevron-down', collapsed ? 'Show' : 'Hide')}</button>
-              <button class="small-button timeline-session-button" type="button" data-session-id="${esc(detail.session.id)}" title="Open the full transcript for this session.">${buttonContent('book-open', 'Transcript')}</button>
+              ${detail.session.metadataOnly ? '' : `<button class="small-button timeline-session-button" type="button" data-session-id="${esc(detail.session.id)}" title="Open the full transcript for this session.">${buttonContent('book-open', 'Transcript')}</button>`}
             </div>
           </div>
-          <p class="meta">${fmtDateRange(detail.session.startedAt, detail.session.updatedAt)} · ${detail.session.messageCount} msgs · ${detail.session.toolCallCount} tools · ${fmtNumber(detail.session.tokenCount)} tokens</p>
+          <p class="meta">${detail.session.metadataOnly ? `${fmtDateRange(detail.session.startedAt, detail.session.updatedAt)} · CLI conversation metadata; message history stays in Antigravity` : `${fmtDateRange(detail.session.startedAt, detail.session.updatedAt)} · ${detail.session.messageCount} msgs · ${detail.session.toolCallCount} tools · ${fmtNumber(detail.session.tokenCount)} tokens`}</p>
           <p class="meta mono" title="${esc(detail.session.cwd)}">${esc(compactPath(detail.session.cwd))}</p>
           ${renderCandidatePills(sessionCandidates)}
           ${renderSessionEvidence(detail.artifacts)}
@@ -3300,7 +4436,7 @@ function renderTimelineSession(detail: SessionDetail, index: number) {
             <article class="timeline-event timeline-collapsed">
               <div class="timeline-dot"></div>
               <div class="timeline-card">
-                <p class="meta">${messages.length} message${messages.length === 1 ? '' : 's'} hidden.</p>
+                <p class="meta">${detail.session.metadataOnly ? 'Conversation metadata only; message history stays in Antigravity.' : `${messages.length} message${messages.length === 1 ? '' : 's'} hidden.`}</p>
               </div>
             </article>
           `
@@ -3351,10 +4487,10 @@ function renderTimelineSessionPlaceholder(session: SessionRecord, index: number)
                 aria-expanded="${collapsed ? 'false' : 'true'}"
                 title="${collapsed ? 'Show this chat in the timeline.' : 'Hide this chat in the timeline.'}"
               >${buttonContent(collapsed ? 'chevron-right' : 'chevron-down', collapsed ? 'Show' : 'Hide')}</button>
-              <button class="small-button timeline-session-button" type="button" data-session-id="${esc(session.id)}" title="Open the full transcript for this session.">${buttonContent('book-open', 'Transcript')}</button>
+              ${session.metadataOnly ? '' : `<button class="small-button timeline-session-button" type="button" data-session-id="${esc(session.id)}" title="Open the full transcript for this session.">${buttonContent('book-open', 'Transcript')}</button>`}
             </div>
           </div>
-          <p class="meta">${fmtDateRange(session.startedAt, session.updatedAt)} · ${collapsed ? `${session.messageCount} messages hidden; expand to load.` : 'loading when visible...'}</p>
+          <p class="meta">${fmtDateRange(session.startedAt, session.updatedAt)} · ${session.metadataOnly ? 'CLI conversation metadata; message history stays in Antigravity' : collapsed ? `${session.messageCount} messages hidden; expand to load.` : 'loading when visible...'}</p>
           <p class="meta mono" title="${esc(session.cwd)}">${esc(compactPath(session.cwd))}</p>
         </div>
       </article>
@@ -3419,7 +4555,8 @@ function handleTimelineClick(event: MouseEvent) {
   const sessionId = button.dataset.sessionId
   if (!sessionId) return
   if (button.classList.contains('timeline-resume-button')) {
-    void createTerminal('codex', sessionId)
+    const kind = button.dataset.agentKind
+    if (kind === 'claude' || kind === 'codex' || kind === 'agy') void createTerminal(kind, sessionId)
   } else if (button.classList.contains('timeline-session-button')) {
     void openSessionTranscript(sessionId)
   } else {
@@ -3642,6 +4779,7 @@ function toggleAllTimelineSessions() {
 }
 
 function renderSettingsControls() {
+  for (const input of appearanceInputs) input.checked = input.value === appearance
   sessionOrderOldestInput.checked = sessionOrder === 'oldest-first'
   sessionOrderNewestInput.checked = sessionOrder === 'newest-first'
   contextClaudeToCodexInput.checked = contextSharingSettings.claudeToCodex
@@ -3995,6 +5133,7 @@ function transcriptPlainText(view: TranscriptView) {
     lines.push(`Session: ${section.session.id}`)
     lines.push(`Started: ${section.session.startedAt}`)
     lines.push(`Updated: ${section.session.updatedAt}`)
+    if (section.session.metadataOnly) lines.push('Antigravity CLI metadata only; message history is available in Antigravity.')
     lines.push('')
     for (const message of section.messages) {
       lines.push(`[${message.timestamp}] ${message.role.toUpperCase()}`)
@@ -4023,6 +5162,12 @@ function renderTranscriptDialog() {
   let renderedMessageCount = 0
   const sectionHtml: string[] = []
   for (const section of activeTranscript.sections) {
+      if (section.session.metadataOnly) {
+        if (!query || section.session.title.toLowerCase().includes(lowerQuery)) {
+          sectionHtml.push(`<section class="transcript-session"><header class="transcript-session-header"><h3>${esc(section.session.title || section.session.id)}</h3></header><p class="meta">Antigravity CLI metadata only. Open the conversation in Antigravity to read its message history.</p></section>`)
+        }
+        continue
+      }
       const matchingMessages = query
         ? section.messages.filter((message) => message.text.toLowerCase().includes(lowerQuery))
         : section.messages
@@ -4596,7 +5741,7 @@ timelineToggleAllButton.addEventListener('click', () => toggleAllTimelineSession
 detailTimeline.addEventListener('click', handleTimelineClick)
 globalCwdInput.value = localStorage.getItem(GLOBAL_CWD_STORAGE_KEY) ?? ''
 const storedLaunchKind = localStorage.getItem(GLOBAL_LAUNCH_KIND_STORAGE_KEY)
-setGlobalLaunchKind(storedLaunchKind === 'codex' || storedLaunchKind === 'shell' ? storedLaunchKind : 'claude')
+setGlobalLaunchKind(storedLaunchKind === 'codex' || storedLaunchKind === 'agy' || storedLaunchKind === 'shell' ? storedLaunchKind : 'claude')
 globalCwdInput.addEventListener('keydown', (event) => {
   if (event.altKey || event.ctrlKey || event.metaKey) return
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -4653,26 +5798,226 @@ refineButton.addEventListener('click', () => void runRefine())
 newShellButton.addEventListener('click', () => void createTerminal('shell'))
 newClaudeButton.addEventListener('click', () => void activateOrCreateAgentTerminal('claude'))
 newCodexButton.addEventListener('click', () => void activateOrCreateAgentTerminal('codex'))
+newAgyButton.addEventListener('click', () => void activateOrCreateAgentTerminal('agy'))
+documentDraftButton.addEventListener('click', () => void draftWorkstreamDocument())
+documentEditButton.addEventListener('click', () => {
+  if (currentWorkstreamDocument) {
+    documentStatus.textContent = ''
+    showDocumentEditor(currentWorkstreamDocument)
+  }
+})
+documentSaveButton.addEventListener('click', () => void saveWorkstreamDocument())
+documentCancelButton.addEventListener('click', () => {
+  pendingWorkstreamDocument = null
+  documentEditing = false
+  documentStatus.textContent = ''
+  renderWorkstreamDocument()
+})
+documentArticle.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const source = target.closest<HTMLButtonElement>('button[data-session-id]')
+  if (source?.dataset.sessionId) void openSessionTranscript(source.dataset.sessionId)
+  const linked = target.closest<HTMLButtonElement>('button[data-workstream-id]')
+  if (linked?.dataset.workstreamId) void selectProject(linked.dataset.workstreamId)
+  if (target.closest('button[data-queue-open-question]')) prefillInvestigation(currentWorkstreamDocument?.sections.openQuestions ?? '')
+})
+overviewChatMode.addEventListener('change', renderOverviewChat)
+workstreamsToggle.addEventListener('click', () => setWorkstreamListOpen(!appShell.classList.contains('sidebar-open')))
+sidebarReturnButton.addEventListener('click', () => setWorkstreamListOpen(false))
+overviewChatToggle.addEventListener('click', () => setKnowledgeOpen(!detailRoot.classList.contains('knowledge-open')))
+overviewChatClose.addEventListener('click', () => setKnowledgeOpen(false))
+overviewChatBackdrop.addEventListener('click', () => setKnowledgeOpen(false))
+window.matchMedia('(max-width: 1320px)').addEventListener('change', (event) => {
+  if (!event.matches) {
+    setKnowledgeOpen(false)
+    appShell.classList.remove('sidebar-open')
+    workstreamsToggle.setAttribute('aria-expanded', 'false')
+  }
+})
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && detailRoot.classList.contains('knowledge-open')) setKnowledgeOpen(false)
+  if (event.key === 'Tab' && detailRoot.classList.contains('knowledge-open')) {
+    const focusables = [...overviewChatCard.querySelectorAll<HTMLElement>('button:not([disabled]), select:not([disabled]), textarea:not([disabled]), input:not([disabled])')]
+      .filter((element) => element.getClientRects().length > 0)
+    const first = focusables[0]
+    const last = focusables[focusables.length - 1]
+    if (first && last && ((event.shiftKey && document.activeElement === first) || (!event.shiftKey && document.activeElement === last))) {
+      event.preventDefault()
+      ;(event.shiftKey ? last : first).focus()
+    }
+  }
+})
+overviewChatSend.addEventListener('click', () => void sendOverviewChat())
+overviewChatQuestion.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault()
+    void sendOverviewChat()
+  }
+})
+overviewChatHistory.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const source = target.closest<HTMLButtonElement>('button[data-session-id]')
+  if (source?.dataset.sessionId) { setKnowledgeOpen(false); void openSessionTranscript(source.dataset.sessionId) }
+  const review = target.closest<HTMLButtonElement>('button[data-review-turn]')
+  if (review?.dataset.reviewTurn) reviewOverviewEdit(Number(review.dataset.reviewTurn))
+  const queue = target.closest<HTMLButtonElement>('button[data-queue-turn]')
+  if (queue?.dataset.queueTurn) {
+    const index = Number(queue.dataset.queueTurn)
+    const question = currentDetail ? overviewChatByWorkstream.get(currentDetail.project.id)?.[index - 1]?.text : ''
+    if (question) prefillInvestigation(question)
+  }
+})
+investigationAdd.addEventListener('click', () => void addInvestigation())
+investigationList.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const child = target.closest<HTMLButtonElement>('button[data-open-child]')
+  if (child?.dataset.openChild) { void selectProject(child.dataset.openChild); return }
+  const remove = target.closest<HTMLButtonElement>('button[data-remove-id]')
+  if (remove?.dataset.removeId) { void removeInvestigation(remove.dataset.removeId); return }
+  const start = target.closest<HTMLButtonElement>('button[data-start-id]')
+  if (!start?.dataset.startId) return
+  const kind = start.closest('.investigation-row')?.querySelector<HTMLSelectElement>('select')?.value
+  if (kind === 'claude' || kind === 'codex' || kind === 'agy') reviewInvestigationStart(start.dataset.startId, kind)
+})
+investigationStartCancel.addEventListener('click', () => investigationStartDialog.close())
+investigationStartDialog.addEventListener('close', () => { investigationStartPending = null })
+investigationStartConfirm.addEventListener('click', () => {
+  const pending = investigationStartPending
+  investigationStartDialog.close()
+  if (pending) void startInvestigation(pending.id, pending.kind)
+})
+investigationParent.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const button = target.closest<HTMLButtonElement>('button[data-parent-id]')
+  if (button?.dataset.parentId) void selectProject(button.dataset.parentId)
+  if (target.closest('button[data-propose-parent]')) void proposeParentArticleUpdate()
+})
+workstreamViewTabs.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const button = target.closest<HTMLButtonElement>('.workstream-view-tab')
+  const view = button?.dataset.view
+  if (view === 'overview' || view === 'activity' || view === 'terminal') setWorkstreamView(view)
+})
+workstreamChangesActivity.addEventListener('click', () => setWorkstreamView('activity'))
+workstreamChangesList.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element) || !currentDetail) return
+  const row = target.closest<HTMLButtonElement>('button[data-change-action]')
+  const action = row?.dataset.changeAction
+  if (action === 'terminal' && row?.dataset.changeId) void jumpToNeedsInputTerminal(currentDetail.project.id, row.dataset.changeId)
+  else if (action === 'session' && row?.dataset.changeId) void openSessionTranscript(row.dataset.changeId)
+  else if (action === 'article') document.querySelector('.workstream-document-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  else if (action === 'handoff') { workstreamHandoff.open = true; workstreamHandoff.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
+  else if (action === 'activity') setWorkstreamView('activity')
+})
 terminalCloseButton.addEventListener('click', () => void closeActiveTerminal())
-terminalHost.addEventListener('pointerdown', () => {
+terminalHost.addEventListener('pointerdown', (event) => {
+  if (event.button !== 2) return
+  const pane = event.target instanceof Element ? event.target.closest<HTMLElement>('.terminal-pane') : null
+  const view = pane?.dataset.terminalId ? terminalViews.get(pane.dataset.terminalId) : undefined
+  cachedRightClickTerminalId = view?.record.id ?? null
+  cachedRightClickSelection = view?.terminal.getSelection?.() ?? ''
+}, true)
+terminalHost.addEventListener('contextmenu', (event) => {
+  const pane = event.target instanceof Element ? event.target.closest<HTMLElement>('.terminal-pane') : null
+  const view = pane?.dataset.terminalId ? terminalViews.get(pane.dataset.terminalId) : undefined
+  if (!view) return
+  const selection = view.terminal.getSelection?.() || (cachedRightClickTerminalId === view.record.id ? cachedRightClickSelection : '')
+  if (!selection.trim()) return
+  event.preventDefault()
+  contextTerminalId = view.record.id
+  contextSelection = selection
+  terminalContextMenu.classList.remove('hidden')
+  const bounds = terminalContextMenu.getBoundingClientRect()
+  terminalContextMenu.style.left = `${Math.max(8, Math.min(event.clientX || 30, window.innerWidth - bounds.width - 8))}px`
+  terminalContextMenu.style.top = `${Math.max(8, Math.min(event.clientY || 30, window.innerHeight - bounds.height - 8))}px`
+  terminalContextOpen.focus()
+})
+terminalHost.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return
   const view = activeTerminalId ? terminalViews.get(activeTerminalId) : undefined
   if (view) focusTerminalWithoutPageScroll(view)
+})
+terminalContextOpen.addEventListener('click', () => {
+  const view = contextTerminalId ? terminalViews.get(contextTerminalId) : undefined
+  const filePath = selectedFilePath(contextSelection)
+  hideTerminalContextMenu()
+  if (view && filePath) openFileReader(filePath, view.record.workstreamId ?? null, view.record.id)
+})
+terminalContextCopy.addEventListener('click', () => {
+  const selection = contextSelection
+  hideTerminalContextMenu()
+  if (selection) void copyText(selection)
+})
+document.addEventListener('pointerdown', (event) => {
+  if (!terminalContextMenu.contains(event.target as Node)) hideTerminalContextMenu()
+}, true)
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') hideTerminalContextMenu()
+})
+fileReaderClose.addEventListener('click', () => fileReaderDialog.close())
+fileReaderForm.addEventListener('submit', (event) => {
+  event.preventDefault()
+  void readReaderPath()
+})
+fileReaderDialog.addEventListener('close', () => {
+  readerRequestVersion += 1
+  const view = readerTerminalId ? terminalViews.get(readerTerminalId) : undefined
+  if (view) focusTerminalWithoutPageScroll(view)
+  readerTerminalId = null
+})
+readingListToggle.addEventListener('click', () => {
+  readingListOpen = !readingListOpen
+  renderReadingList()
+})
+readFileByPath.addEventListener('click', () => openFileReader('', selectedProjectId))
+fileReaderKeep.addEventListener('click', () => {
+  if (!readerFile || !readerWorkstreamId) return
+  const paths = readingFilesByWorkstream[readerWorkstreamId] ?? []
+  if (paths.includes(readerFile.path)) return
+  readingFilesByWorkstream[readerWorkstreamId] = [readerFile.path, ...paths].slice(0, 30)
+  saveReadingFiles()
+  renderReadingList()
+  updateReaderKeepButton()
+})
+readingList.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element) || !selectedProjectId) return
+  const open = target.closest<HTMLButtonElement>('button[data-reading-index]')
+  const remove = target.closest<HTMLButtonElement>('button[data-remove-reading-index]')
+  const paths = readingFilesByWorkstream[selectedProjectId] ?? []
+  if (open?.dataset.readingIndex) {
+    const filePath = paths[Number(open.dataset.readingIndex)]
+    if (filePath) openFileReader(filePath, selectedProjectId)
+  } else if (remove?.dataset.removeReadingIndex) {
+    paths.splice(Number(remove.dataset.removeReadingIndex), 1)
+    readingFilesByWorkstream[selectedProjectId] = paths
+    saveReadingFiles()
+    renderReadingList()
+  }
 })
 workstreamDigest.addEventListener('click', (event) => {
   const target = event.target
   if (!(target instanceof Element) || !currentDetail) return
-  const row = target.closest<HTMLElement>('.workstream-digest-row[data-terminal-id]')
+  const row = target.closest<HTMLElement>('.workstream-digest-row.actionable')
   if (!row || !workstreamDigest.contains(row)) return
-  void jumpToNeedsInputTerminal(currentDetail.project.id, row.dataset.terminalId)
+  if (row.dataset.terminalId) void jumpToNeedsInputTerminal(currentDetail.project.id, row.dataset.terminalId)
+  else if (row.dataset.sessionId) void openSessionTranscript(row.dataset.sessionId)
 })
 workstreamDigest.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter' && event.key !== ' ') return
   const target = event.target
   if (!(target instanceof Element) || !currentDetail) return
-  const row = target.closest<HTMLElement>('.workstream-digest-row[data-terminal-id]')
+  const row = target.closest<HTMLElement>('.workstream-digest-row.actionable')
   if (!row || !workstreamDigest.contains(row)) return
   event.preventDefault()
-  void jumpToNeedsInputTerminal(currentDetail.project.id, row.dataset.terminalId)
+  if (row.dataset.terminalId) void jumpToNeedsInputTerminal(currentDetail.project.id, row.dataset.terminalId)
+  else if (row.dataset.sessionId) void openSessionTranscript(row.dataset.sessionId)
 })
 terminalCopyContextButton.addEventListener('click', () => void copyResumeContext(terminalCopyContextButton))
 headerCopyContextButton.addEventListener('click', () => void copyResumeContext(headerCopyContextButton))
@@ -4722,9 +6067,89 @@ transcriptBody.addEventListener('click', (event) => {
 })
 copyTranscriptButton.addEventListener('click', () => void copyTranscript())
 suggestTitleButton.addEventListener('click', () => void runSuggestTitle())
+switcherClose.addEventListener('click', () => switcherDialog.close())
+keyboardHelpClose.addEventListener('click', () => keyboardHelpDialog.close())
+keyboardHelpOpen.addEventListener('click', () => {
+  settingsDialog.close()
+  openKeyboardHelp()
+})
+switcherDialog.addEventListener('close', () => {
+  if (!switcherSelecting) switcherReturnFocus?.focus()
+  switcherSelecting = false
+  switcherReturnFocus = null
+})
+switcherQuery.addEventListener('input', () => {
+  switcherIndex = 0
+  renderSwitcher()
+})
+switcherQuery.addEventListener('keydown', (event) => {
+  if (switcherScope === 'workstreams' && event.altKey && !event.ctrlKey && !event.metaKey) {
+    const target = switcherItems[switcherIndex]
+    if (target?.kind !== 'workstream') return
+    if (event.code === 'KeyP') {
+      event.preventDefault()
+      togglePinnedWorkstream(target.id)
+    } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault()
+      const visiblePinned = switcherItems
+        .filter((item): item is Extract<SwitcherTarget, { kind: 'workstream' }> => item.kind === 'workstream')
+        .filter((item) => pinnedWorkstreamIds.has(item.id))
+        .map((item) => item.id)
+      movePinnedWorkstream(target.id, event.key === 'ArrowUp' ? -1 : 1, 'none', visiblePinned)
+    } else {
+      return
+    }
+    renderSwitcher()
+    const selectedIndex = switcherItems.findIndex((item) => item.kind === 'workstream' && item.id === target.id)
+    if (selectedIndex >= 0) {
+      switcherIndex = selectedIndex
+      renderSwitcher()
+      switcherResults.querySelector<HTMLElement>('.switcher-row.active')?.scrollIntoView({ block: 'nearest' })
+    }
+    return
+  }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    if (!switcherItems.length) return
+    switcherIndex = (switcherIndex + (event.key === 'ArrowDown' ? 1 : -1) + switcherItems.length) % switcherItems.length
+    renderSwitcher()
+    switcherResults.querySelector<HTMLElement>('.switcher-row.active')?.scrollIntoView({ block: 'nearest' })
+  } else if (event.key === 'Enter') {
+    event.preventDefault()
+    void chooseSwitcherTarget(switcherIndex)
+  }
+})
+switcherResults.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const row = target.closest<HTMLButtonElement>('button[data-switcher-index]')
+  if (row?.dataset.switcherIndex) void chooseSwitcherTarget(Number(row.dataset.switcherIndex))
+})
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'F1' && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    if (!keyboardHelpDialog.open && document.querySelector('dialog[open]')) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (keyboardHelpDialog.open) keyboardHelpDialog.close()
+    else openKeyboardHelp()
+    return
+  }
+  const key = event.key.toLowerCase()
+  if (!event.altKey && event.shiftKey && (event.ctrlKey || event.metaKey) && (key === 'p' || key === 'l')) {
+    if (!switcherDialog.open && document.querySelector('dialog[open]')) return
+    event.preventDefault()
+    event.stopPropagation()
+    const scope = key === 'p' ? 'workstreams' : 'current'
+    if (switcherDialog.open && switcherScope === scope) switcherDialog.close()
+    else openSwitcher(scope)
+  }
+}, true)
 settingsToggle.addEventListener('click', () => {
   renderSettingsControls()
   settingsDialog.showModal()
+})
+for (const input of appearanceInputs) input.addEventListener('change', () => {
+  if (input.checked && (input.value === 'dark' || input.value === 'light' || input.value === 'system')) setAppearance(input.value)
 })
 sessionOrderOldestInput.addEventListener('change', () => {
   if (sessionOrderOldestInput.checked) setSessionOrder('oldest-first')

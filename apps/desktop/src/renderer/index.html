@@ -4,14 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>gogoagent</title>
+    <script>
+      try {
+        const choice = localStorage.getItem('gogoagent.theme.v1')
+        document.documentElement.dataset.theme = choice === 'light' || (choice === 'system' && matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark'
+      } catch { document.documentElement.dataset.theme = 'dark' }
+    </script>
     <link rel="stylesheet" href="./vendor/xterm.css" />
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./light.css" />
   </head>
   <body>
     <div class="app-shell">
-      <aside class="sidebar">
+      <aside id="sidebar" class="sidebar">
         <div class="brand">
           <h1>gogoagent</h1>
+          <button id="sidebar-return-button" class="secondary-button" type="button">Return to workstream →</button>
         </div>
 
         <div class="sidebar-actions">
@@ -93,6 +101,10 @@
               <span><span class="button-icon" data-icon="code-2" aria-hidden="true"></span>Codex</span>
             </label>
             <label>
+              <input id="global-launch-agy" type="radio" name="global-launch-kind" value="agy" />
+              <span title="Antigravity CLI"><span class="button-icon" data-icon="lightbulb" aria-hidden="true"></span>AGY</span>
+            </label>
+            <label>
               <input id="global-launch-shell" type="radio" name="global-launch-kind" value="shell" />
               <span><span class="button-icon" data-icon="terminal" aria-hidden="true"></span>Shell</span>
             </label>
@@ -140,6 +152,7 @@
         <article id="project-detail" class="detail-stack hidden">
           <header class="detail-header">
             <div>
+              <button id="workstreams-toggle" class="secondary-button" type="button" aria-expanded="false" aria-controls="sidebar">← Workstreams <span id="workstreams-toggle-count" class="badge attention-count hidden"></span></button>
               <p class="eyebrow" id="detail-subtitle">Workstream</p>
               <div class="detail-title-row">
                 <h2 id="detail-title">—</h2>
@@ -226,6 +239,10 @@
                 <span class="button-icon" data-icon="code-2" aria-hidden="true"></span>
                 <span class="button-label">Codex</span>
               </button>
+              <button id="new-agy-button" class="secondary-button" type="button" title="Start Antigravity CLI from this directory.">
+                <span class="button-icon" data-icon="lightbulb" aria-hidden="true"></span>
+                <span class="button-label">AGY</span>
+              </button>
               <button id="new-shell-button" class="secondary-button" type="button" title="Start a shell attached to this workstream.">
                 <span class="button-icon" data-icon="terminal" aria-hidden="true"></span>
                 <span class="button-label">Shell</span>
@@ -233,16 +250,97 @@
             </div>
           </header>
 
-          <section class="detail-card workstream-state-card project-only">
+          <nav id="workstream-view-tabs" class="workstream-view-tabs project-only" aria-label="Workstream views">
+            <button type="button" class="workstream-view-tab" data-view="overview" aria-pressed="true">Overview</button>
+            <button type="button" class="workstream-view-tab" data-view="activity" aria-pressed="false">Activity</button>
+            <button type="button" class="workstream-view-tab" data-view="terminal" aria-pressed="false">Terminal</button>
+            <button id="overview-chat-toggle" class="secondary-button" type="button" aria-expanded="false" aria-controls="overview-chat-card">Ask this workstream</button>
+          </nav>
+
+          <div id="investigation-parent" class="project-only overview-view hidden"></div>
+
+          <div class="overview-knowledge-grid project-only overview-view">
+          <section class="detail-card workstream-document-card">
             <div class="section-heading-row">
               <div>
-                <p class="label">Workstream state</p>
-                <p class="meta">A durable handoff shared by every gogoagent client.</p>
+                <p class="label">Working document</p>
+                <p class="meta">A living reference for this workstream, organized by topic and linked to source sessions.</p>
+                <div class="document-file-actions">
+                  <button id="reading-list-toggle" class="document-file-link" type="button" aria-expanded="false" aria-controls="reading-list-card">Files to read <span id="reading-list-count">(0)</span></button>
+                  <button id="read-file-by-path" class="document-file-link" type="button">Open file by path</button>
+                </div>
+              </div>
+              <div class="button-row">
+                <button id="document-draft-button" class="secondary-button" type="button">Update from activity</button>
+                <button id="document-edit-button" class="secondary-button" type="button">Edit</button>
+                <button id="document-save-button" class="hidden" type="button">Save article</button>
+                <button id="document-cancel-button" class="secondary-button hidden" type="button">Cancel</button>
+              </div>
+            </div>
+            <div id="reading-list-card" class="reading-list-panel hidden">
+              <div id="reading-list" class="reading-list"></div>
+            </div>
+            <p id="document-status" class="meta" role="status" aria-live="polite"></p>
+            <div id="document-article" class="workstream-document-article"></div>
+            <form id="document-form" class="workstream-document-form hidden"></form>
+          </section>
+
+          <aside id="overview-chat-card" class="detail-card overview-chat-card" aria-labelledby="overview-chat-title">
+            <div class="section-heading-row">
+              <div>
+                <p class="eyebrow">Questions and edits</p>
+                <h3 id="overview-chat-title">Ask this workstream</h3>
+                <p class="meta">Answers use the working document and recorded sessions. This chat does not control terminals.</p>
+              </div>
+              <button id="overview-chat-close" class="secondary-button" type="button" aria-label="Close knowledge desk">Close</button>
+            </div>
+            <div id="overview-chat-history" class="overview-chat-history" aria-live="polite"></div>
+            <div class="overview-chat-compose">
+              <label for="overview-chat-mode">I want to</label>
+              <select id="overview-chat-mode">
+                <option value="answer">Ask a question</option>
+                <option value="rewrite">Propose an article edit</option>
+              </select>
+              <label id="overview-chat-section-label" class="hidden" for="overview-chat-section">Article section</label>
+              <select id="overview-chat-section" class="hidden">
+                <option value="overview">Overview</option>
+                <option value="currentStatus">Current status</option>
+                <option value="findings">Findings</option>
+                <option value="decisions">Decisions</option>
+                <option value="openQuestions">Open questions</option>
+                <option value="nextSteps">Next steps</option>
+              </select>
+              <textarea id="overview-chat-question" rows="3" maxlength="2000" placeholder="What have we learned, and what is still uncertain?"></textarea>
+              <button id="overview-chat-send" type="button">Ask</button>
+              <p id="overview-chat-status" class="meta" role="status" aria-live="polite"></p>
+            </div>
+          </aside>
+          <button id="overview-chat-backdrop" class="overview-chat-backdrop" type="button" tabindex="-1" aria-label="Close knowledge desk"></button>
+          </div>
+
+          <section class="detail-card workstream-changes-card project-only overview-view" aria-labelledby="workstream-changes-title">
+            <div class="section-heading-row">
+              <div>
+                <p class="label" id="workstream-changes-title">Since your last visit</p>
+                <p id="workstream-changes-meta" class="meta">Checking recorded activity…</p>
+              </div>
+              <button id="workstream-changes-activity" class="secondary-button" type="button">View activity</button>
+            </div>
+            <div id="workstream-changes-list" class="workstream-changes-list"></div>
+            <p id="workstream-changes-note" class="meta"></p>
+          </section>
+
+          <details id="workstream-handoff" class="workstream-handoff project-only overview-view">
+            <summary><span>Agent handoff</span><span class="meta">Saved notes for continuing an agent</span></summary>
+          <section class="detail-card workstream-state-card">
+            <div class="section-heading-row">
+              <div>
+                <p class="meta">Goal, status, next action, and checks shared with the next agent.</p>
               </div>
               <div class="button-row">
                 <button id="state-edit-button" class="secondary-button" type="button">
                   <span class="button-icon" data-icon="pencil" aria-hidden="true"></span>
-                  <span class="button-label">Edit</span>
+                  <span class="button-label">Edit handoff</span>
                 </button>
                 <button id="state-save-button" class="hidden" type="button">
                   <span class="button-icon" data-icon="check" aria-hidden="true"></span>
@@ -254,6 +352,7 @@
                 </button>
               </div>
             </div>
+            <p id="workstream-state-freshness" class="workstream-state-freshness"></p>
             <div id="workstream-state-summary" class="workstream-state-summary"></div>
             <form id="workstream-state-form" class="workstream-state-form hidden">
               <label>Goal<textarea id="state-goal-input" rows="2" maxlength="1200"></textarea></label>
@@ -264,8 +363,37 @@
             </form>
             <p id="workstream-state-status" class="meta block"></p>
           </section>
+          </details>
 
-          <section id="terminal-card" class="detail-card terminal-card">
+          <section class="detail-card investigation-card project-only overview-view" aria-labelledby="investigation-title">
+            <div class="section-heading-row">
+              <div>
+                <p class="eyebrow">Related work</p>
+                <h3 id="investigation-title">Follow-up investigations</h3>
+                <p class="meta">Keep open questions linked to this article. Start one when it is ready for its own workstream.</p>
+              </div>
+            </div>
+            <div id="investigation-list" class="investigation-list"></div>
+            <div class="investigation-compose">
+              <label for="investigation-new-title">New investigation</label>
+              <input id="investigation-new-title" maxlength="120" placeholder="Short title" />
+              <textarea id="investigation-new-question" rows="2" maxlength="2000" placeholder="What should this investigation answer?"></textarea>
+              <button id="investigation-add" class="secondary-button" type="button">Add to queue</button>
+              <p id="investigation-status" class="meta" role="status" aria-live="polite"></p>
+            </div>
+          </section>
+
+          <section class="detail-card workstream-digest-card project-only activity-view">
+            <div class="section-heading-row">
+              <div>
+                <p class="label">Recent evidence</p>
+                <p class="meta">Latest recorded activity; it may not reflect completion.</p>
+              </div>
+            </div>
+            <div id="workstream-digest" class="workstream-digest"></div>
+          </section>
+
+          <section id="terminal-card" class="detail-card terminal-card terminal-view">
             <div class="section-heading-row">
               <div>
                 <p class="label">Terminals</p>
@@ -315,16 +443,7 @@
             </div>
           </section>
 
-          <section class="detail-card workstream-digest-card project-only">
-            <div class="section-heading-row">
-              <div>
-                <p class="label">Where we are</p>
-              </div>
-            </div>
-            <div id="workstream-digest" class="workstream-digest"></div>
-          </section>
-
-          <section class="detail-card project-only">
+          <section class="detail-card project-only activity-view">
             <div class="section-heading-row">
               <div>
                 <p class="label">Timeline</p>
@@ -352,7 +471,7 @@
             <div id="detail-timeline" class="timeline"></div>
           </section>
 
-          <section class="detail-card project-only">
+          <section class="detail-card project-only activity-view">
             <div class="section-heading-row">
               <div>
                 <p class="label">Refined lessons</p>
@@ -366,12 +485,12 @@
             <div id="detail-refined" class="list compact-list"></div>
           </section>
 
-          <section class="detail-card project-only">
+          <section class="detail-card project-only activity-view">
             <p class="label">Key work areas</p>
             <div id="detail-paths" class="list compact-list"></div>
           </section>
 
-          <section class="detail-card project-only">
+          <section class="detail-card project-only activity-view">
             <p class="label">Claude sessions</p>
             <div id="detail-sessions" class="list compact-list"></div>
           </section>
@@ -395,6 +514,97 @@
         <span class="button-label">Debug</span>
       </button>
     </footer>
+
+    <div id="terminal-context-menu" class="terminal-context-menu hidden" role="menu" aria-label="Terminal selection">
+      <button id="terminal-context-open" type="button" role="menuitem">Open selected file in reader</button>
+      <button id="terminal-context-copy" type="button" role="menuitem">Copy selection</button>
+    </div>
+
+    <dialog id="file-reader-dialog" class="file-reader-dialog" aria-labelledby="file-reader-title">
+      <div class="file-reader-header">
+        <div>
+          <p class="eyebrow">Read-only workspace file</p>
+          <h2 id="file-reader-title">Open a file</h2>
+        </div>
+        <button id="file-reader-close" class="secondary-button" type="button">Close</button>
+      </div>
+      <form id="file-reader-form" class="file-reader-form">
+        <label for="file-reader-path">File path</label>
+        <div class="file-reader-path-row">
+          <input id="file-reader-path" type="text" autocomplete="off" spellcheck="false" />
+          <button type="submit">Open</button>
+        </div>
+      </form>
+      <p id="file-reader-status" class="meta" role="status" aria-live="polite"></p>
+      <div class="file-reader-toolbar">
+        <span id="file-reader-meta" class="meta"></span>
+        <button id="file-reader-keep" class="secondary-button hidden" type="button">Keep in Overview</button>
+      </div>
+      <div id="file-reader-content" class="file-reader-content"></div>
+    </dialog>
+
+    <dialog id="keyboard-help-dialog" class="keyboard-help-dialog" aria-labelledby="keyboard-help-title">
+      <div class="keyboard-help-header">
+        <div>
+          <p class="eyebrow">gogoagent help</p>
+          <h2 id="keyboard-help-title">Keyboard shortcuts</h2>
+        </div>
+        <button id="keyboard-help-close" class="secondary-button" type="button">Close</button>
+      </div>
+      <div class="keyboard-help-body">
+        <section>
+          <h3>Move around</h3>
+          <dl>
+            <div><dt>Choose a workstream</dt><dd><kbd>Ctrl/Cmd+Shift+P</kbd></dd></div>
+            <div><dt>Choose a view or terminal in this workstream</dt><dd><kbd>Ctrl/Cmd+Shift+L</kbd></dd></div>
+            <div><dt>Move through picker results</dt><dd><kbd>↑</kbd> <kbd>↓</kbd></dd></div>
+            <div><dt>Open a picker result</dt><dd><kbd>Enter</kbd></dd></div>
+            <div><dt>Close a picker or dialog</dt><dd><kbd>Esc</kbd></dd></div>
+          </dl>
+        </section>
+        <section>
+          <h3>Organize workstreams</h3>
+          <dl>
+            <div><dt>Pin or unpin the selected workstream</dt><dd><kbd>Alt+P</kbd> in the workstream picker</dd></div>
+            <div><dt>Move a pinned workstream</dt><dd><kbd>Alt+↑</kbd> <kbd>Alt+↓</kbd> in the picker or on its focused sidebar card</dd></div>
+          </dl>
+        </section>
+        <section>
+          <h3>Read and write</h3>
+          <dl>
+            <div><dt>Copy selected terminal text</dt><dd><kbd>Ctrl/Cmd+C</kbd></dd></div>
+            <div><dt>Paste into a terminal</dt><dd><kbd>Ctrl/Cmd+V</kbd></dd></div>
+            <div><dt>Send a workstream question</dt><dd><kbd>Ctrl/Cmd+Enter</kbd> in the question box</dd></div>
+            <div><dt>Open a typed file path</dt><dd><kbd>Enter</kbd> in the reader</dd></div>
+            <div><dt>Choose a directory suggestion</dt><dd><kbd>↑</kbd> <kbd>↓</kbd>, then <kbd>Tab</kbd></dd></div>
+            <div><dt>Start from the directory field</dt><dd><kbd>Enter</kbd></dd></div>
+            <div><dt>Save or cancel a name edit</dt><dd><kbd>Enter</kbd> or <kbd>Esc</kbd></dd></div>
+          </dl>
+        </section>
+        <section>
+          <h3>Window</h3>
+          <dl>
+            <div><dt>Zoom in or out</dt><dd><kbd>Ctrl/Cmd+=</kbd> <kbd>Ctrl/Cmd+-</kbd></dd></div>
+            <div><dt>Reset zoom</dt><dd><kbd>Ctrl/Cmd+0</kbd></dd></div>
+            <div><dt>Show this help</dt><dd><kbd>F1</kbd></dd></div>
+          </dl>
+        </section>
+      </div>
+    </dialog>
+
+    <dialog id="switcher-dialog" class="switcher-dialog" aria-labelledby="switcher-title">
+      <div class="switcher-header">
+        <div>
+          <p class="eyebrow">Quick switch</p>
+          <h2 id="switcher-title">Switch workstream</h2>
+        </div>
+        <button id="switcher-close" class="secondary-button" type="button">Close</button>
+      </div>
+      <label for="switcher-query" class="meta">Search</label>
+      <input id="switcher-query" type="search" autocomplete="off" spellcheck="false" placeholder="Find a workstream…" />
+      <div id="switcher-results" class="switcher-results"></div>
+      <p id="switcher-help" class="meta switcher-help">↑↓ to choose · Enter to open · Esc to close</p>
+    </dialog>
 
     <dialog id="debug-dialog" class="debug-dialog">
       <form method="dialog" class="debug-dialog-header">
@@ -496,6 +706,20 @@
         </button>
       </form>
       <section class="settings-section">
+        <p class="label">Appearance</p>
+        <div class="segmented-control theme-control" role="radiogroup" aria-label="Appearance">
+          <label><input type="radio" name="appearance" value="dark" /><span>Dark</span></label>
+          <label><input type="radio" name="appearance" value="light" /><span>Light</span></label>
+          <label><input type="radio" name="appearance" value="system" /><span>System</span></label>
+        </div>
+        <p class="meta">The terminal keeps its dark colors so agent output stays legible.</p>
+      </section>
+      <section class="settings-section">
+        <p class="label">Keyboard navigation</p>
+        <p class="meta">Press F1 to see shortcuts from a workstream or terminal.</p>
+        <button id="keyboard-help-open" class="secondary-button" type="button">View keyboard shortcuts</button>
+      </section>
+      <section class="settings-section">
         <p class="label">Timeline order</p>
         <div class="segmented-control" role="radiogroup" aria-label="Timeline order">
           <label>
@@ -580,6 +804,23 @@
       <div class="continuation-dialog-actions">
         <button id="continuation-secondary-button" class="secondary-button" type="button">Start without context</button>
         <button id="continuation-primary-button" type="button">Start and paste context</button>
+      </div>
+    </dialog>
+
+    <dialog id="investigation-start-dialog" class="investigation-start-dialog" aria-labelledby="investigation-start-title">
+      <p class="eyebrow">Linked investigation</p>
+      <h2 id="investigation-start-title">Start investigation</h2>
+      <p id="investigation-start-summary"></p>
+      <dl>
+        <dt>Question</dt><dd id="investigation-start-question"></dd>
+        <dt>Agent</dt><dd id="investigation-start-agent"></dd>
+        <dt>Working directory</dt><dd id="investigation-start-directory"></dd>
+      </dl>
+      <p id="investigation-start-warning" class="meta"></p>
+      <p class="meta">The question will be pasted into the new terminal for you to review and send.</p>
+      <div class="button-row">
+        <button id="investigation-start-cancel" class="secondary-button" type="button">Cancel</button>
+        <button id="investigation-start-confirm" type="button">Start linked workstream</button>
       </div>
     </dialog>
 
